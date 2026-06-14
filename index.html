@@ -2,12 +2,37 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Full Screen Stereo WebAR Engine</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>Samsung A21s WebAR Engine</title>
     <style>
-        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #000; position: fixed; }
-        #xr-button { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 12px 24px; background: #00bcd4; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; z-index: 999; }
-        canvas { display: block; width: 100vw; height: 100vh; }
+        body, html { 
+            margin: 0; 
+            padding: 0; 
+            width: 100%; 
+            height: 100%; 
+            overflow: hidden; 
+            background-color: #000; 
+            position: fixed; 
+        }
+        #xr-button { 
+            position: absolute; 
+            bottom: 25px; 
+            left: 50%; 
+            transform: translateX(-50%); 
+            padding: 14px 28px; 
+            background: #00bcd4; 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            font-weight: bold; 
+            cursor: pointer; 
+            z-index: 999; 
+        }
+        canvas { 
+            display: block; 
+            width: 100vw; 
+            height: 100vh; 
+        }
     </style>
 </head>
 <body>
@@ -16,17 +41,19 @@
     <canvas id="webgl-canvas"></canvas>
 
 <script>
-// --- SHADER SOURCE CODE ---
-// Added a scaling matrix calculation to perfectly auto-fit any screen dimension
+// --- SAMSUNG A21s OPTIMIZED SHADERS ---
+// The geometry position multiplier is raised to 1.45 to force the texture map 
+// past the extreme 20:9 viewport restrictions of the Galaxy screen.
 const videoVS = `#version 300 es
     in vec2 position;
     out vec2 vUV;
     uniform vec2 uScale; 
     void main() {
-        // Center-crop scale math to maximize screen coverage
         vUV = (position * uScale) * 0.5 + 0.5;
         vUV.y = 1.0 - vUV.y; 
-        gl_Position = vec4(position, 0.999, 1.0); 
+        
+        // Blow past the native 20:9 WebXR safe-zone border mask
+        gl_Position = vec4(position * 1.45, 0.999, 1.0); 
     }
 `;
 
@@ -36,11 +63,15 @@ const videoFS = `#version 300 es
     uniform sampler2D uVideoTex;
     out vec4 fragColor;
     void main() {
-        fragColor = texture(uVideoTex, vUV);
+        // Safe sampling fallback for over-scaled aspect ratios
+        if (vUV.x < -0.2 || vUV.x > 1.2 || vUV.y < -0.2 || vUV.y > 1.2) {
+            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+        } else {
+            fragColor = texture(uVideoTex, clamp(vUV, 0.0, 1.0));
+        }
     }
 `;
 
-// --- ENGINE STATE ---
 let gl, xrSession, xrRefSpace;
 let videoElement, videoTexture;
 let videoProgram, quadVAO;
@@ -49,7 +80,6 @@ let scaleUniformLocation;
 const canvas = document.getElementById('webgl-canvas');
 const xrButton = document.getElementById('xr-button');
 
-// Make canvas adapt perfectly to modern responsive layouts
 function resizeCanvas() {
     canvas.width = window.innerWidth * window.devicePixelRatio;
     canvas.height = window.innerHeight * window.devicePixelRatio;
@@ -57,13 +87,13 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// --- 1. INITIALIZE CAMERA & WEBGL ---
 async function initEngine() {
     try {
         videoElement = document.createElement('video');
         videoElement.autoplay = true;
         videoElement.playsInline = true;
-        // Request absolute maximum profile layout performance from phone sensors
+        
+        // Grab the native 1080p stream from the A21s rear main sensor
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }
         });
@@ -74,14 +104,13 @@ async function initEngine() {
         checkXRSupport();
     } catch (err) {
         xrButton.textContent = "Camera Error / No HTTPS";
-        console.error("Camera access failed:", err);
+        console.error(err);
     }
 
-    gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: false, antialias: true });
+    gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: false, antialias: false });
     setupVideoShaders();
 }
 
-// --- 2. COMPILE SHADERS & QUAD MESH ---
 function setupVideoShaders() {
     const vs = gl.createShader(gl.VERTEX_SHADER);
     gl.shaderSource(vs, videoVS);
@@ -121,7 +150,6 @@ function setupVideoShaders() {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 }
 
-// --- 3. WEBXR SESSION MANAGEMENT ---
 async function checkXRSupport() {
     if (navigator.xr) {
         const supported = await navigator.xr.isSessionSupported('immersive-vr');
@@ -157,7 +185,6 @@ function onButtonClicked() {
     }
 }
 
-// --- 4. ENGINE STEREO RENDER LOOP ---
 function onXRFrame(time, frame) {
     const session = frame.session;
     session.requestAnimationFrame(onXRFrame);
@@ -178,8 +205,7 @@ function onXRFrame(time, frame) {
         const viewport = layer.getViewport(view);
         gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
 
-        // --- MATH RE-CALCULATION FOR FULL SCREEN COVERAGE ---
-        // Dynamically scales texture maps to fill viewport boxes edge-to-edge
+        // Compensating for the 20:9 aspect layout differences
         const screenAspect = viewport.width / viewport.height;
         const videoAspect = videoElement.videoWidth / videoElement.videoHeight;
         
@@ -193,7 +219,6 @@ function onXRFrame(time, frame) {
         }
 
         gl.useProgram(videoProgram);
-        // Inject the math into our GLSL Vertex Shader 
         gl.uniform2f(scaleUniformLocation, scaleX, scaleY);
 
         gl.disable(gl.DEPTH_TEST); 
