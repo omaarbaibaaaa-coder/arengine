@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scratch Stereo WebAR Engine</title>
+    <style>
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background-color: #000; }
+        #xr-button { position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%); padding: 12px 24px; background: #00bcd4; color: white; border: none; border-radius: 4px; font-weight: bold; cursor: pointer; z-index: 999; }
+    </style>
+</head>
+<body>
+
+    <button id="xr-button" disabled>Loading Camera...</button>
+    <canvas id="webgl-canvas"></canvas>
+
+<script>
+// --- SHADER SOURCE CODE ---
+const videoVS = `#version 300 es
+    in vec2 position;
+    out vec2 vUV;
+    void main() {
+        vUV = position * 0.5 + 0.5;
+        vUV.y = 1.0 - vUV.y; // Flip Y for WebGL texture coordination
+        gl_Position = vec4(position, 0.999, 1.0); // Render at the very back of the depth buffer
+    }
+`;
+
+const videoFS = `#version 300 es
+    precision highp float;
+    in vec2 vUV;
+    uniform sampler2D uVideoTex;
+    out vec4 fragColor;
+    void main() {
+        fragColor = texture(uVideoTex, vUV);
+    }
+`;
+
+// --- ENGINE STATE ---
+let gl, xrSession, xrRefSpace;
+let videoElement, videoTexture;
+let videoProgram, quadVAO;
+
+const canvas = document.getElementById('webgl-canvas');
+const xrButton = document.getElementById('xr-button');
+
+// --- 1. INITIALIZE CAMERA & WEBGL ---
+async function initEngine() {
+    // Request rear phone camera
+    try {
+        videoElement = document.createElement('video');
+        videoElement.autoplay = true;
+        videoElement.playsInline = true;
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: { exact: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }
+        });
+        videoElement.srcObject = stream;
+        await videoElement.play();
+        
+        xrButton.textContent = "Enter Stereo AR";
+        checkXRSupport();
+    } catch (err) {
+        xrButton.textContent = "Camera Error / No HTTPS";
+        console.error("Camera access failed:", err);
+    }
+
+    // Setup WebGL2 Context
+    gl = canvas.getContext('webgl2', { xrCompatible: true });
+    setupVideoShaders();
+}
+
+// --- 2. COMPILE SHADERS & QUAD MESH ---
+function setupVideoShaders() {
+    const vs = gl.createShader(gl.VERTEX_SHADER);
+    gl.shaderSource(vs, videoVS);
+    gl.compileShader(vs);
+
+    const fs = gl.createShader(gl.FRAGMENT_SHADER);
+    gl.shaderSource(fs, videoFS);
+    gl.compileShader(fs);
+
+    videoProgram = gl.createProgram();
+    gl.attachShader(videoProgram, vs);
+    gl.attachShader(videoProgram, fs);
+    gl.linkProgram(videoProgram);
+
+    // Full-screen Quad Coordinates (-1 to 1)
+    const vertices = new Float32Array([
+        -1, -1,  1, -1, -1,  1,
+        -1,  1,  1, -1,  1,  1
+    ]);
+
+    quadVAO = gl.createVertexArray();
+    gl.bindVertexArray(quadVAO);
+    const vbo = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
+    
+    const posLoc = gl.getAttribLocation(videoProgram, "position");
+    gl.enableVertexAttribArray(posLoc);
+    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+    // Create Video Texture Object
+    videoTexture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+}
+
+// --- 3. WEBXR SESSION MANAGEMENT ---
+async function checkXRSupport() {
+    if (navigator.xr) {
+        const supported = await navigator.xr.isSessionSupported('immersive-vr');
+        if (supported) {
+            xrButton.disabled = false;
+            xrButton.addEventListener('click', onButtonClicked);
+        } else {
+            xrButton.textContent = "Stereo VR Mode Unsupported";
+        }
+    } else {
+        xrButton.textContent = "WebXR Not Found";
+    }
+}
+
+function onButtonClicked() {
+    if (!xrSession) {
+        navigator.xr.requestSession('immersive-vr', {
+            optionalFeatures: ['local-floor']
+        }).then(session => {
+            xrSession = session;
+            xrButton.textContent = "Exit AR";
+            
+            // Set up WebGL layer mapping
+            const xrWebGLLayer = new XRWebGLLayer(xrSession, gl);
+            xrSession.updateRenderState({ baseLayer: xrWebGLLayer });
+            
+            xrSession.requestReferenceSpace('local').then(refSpace => {
+                xrRefSpace = refSpace;
+                xrSession.requestAnimationFrame(onXRFrame);
+            });
+        });
+    } else {
+        xrSession.end();
+    }
+}
+
+// --- 4. ENGINE STEREO RENDER LOOP ---
+function onXRFrame(time, frame) {
+    const session = frame.session;
+    session.requestAnimationFrame(onXRFrame);
+
+    const pose = frame.getViewerPose(xrRefSpace);
+    if (!pose) return;
+
+    const layer = session.renderState.baseLayer;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
+    
+    // Clear depth but retain color
+    gl.clearDepth(1.0);
+    gl.clear(gl.DEPTH_BUFFER_BIT);
+
+    // Dynamic camera texture frame update
+    gl.bindTexture(gl.TEXTURE_2D, videoTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoElement);
+
+    // Loop through both viewports (Left Eye and Right Eye)
+    for (const view of pose.views) {
+        const viewport = layer.getViewport(view);
+        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
+
+        // --- Step A: Render Camera Backdrop for this eye ---
+        gl.useProgram(videoProgram);
+        gl.disable(gl.DEPTH_TEST); // Make sure background quad passes depth checks
+        gl.bindVertexArray(quadVAO);
+        gl.drawArrays(gl.TRIANGLES, 0, 6);
+
+        // --- Step B: Render Your 3D Assets Over It ---
+        gl.enable(gl.DEPTH_TEST);
+        // [YOUR CUSTOM 3D ENGINE DRAW CODE GOES HERE]
+        // Use view.projectionMatrix and view.transform.inverse.matrix to position objects relative to the eyes
+    }
+}
+
+// Launch the custom engine
+initEngine();
+</script>
+</body>
+</html>
