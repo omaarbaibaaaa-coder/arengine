@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>A21s Safe Click WebAR Engine</title>
+    <title>A21s Fixed Sequential Engine</title>
     <style>
         body, html { 
             margin: 0; padding: 0; width: 100%; height: 100%; 
@@ -26,18 +26,17 @@
         #ai-status {
             position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
             color: #00ffcc; font-weight: bold; z-index: 999; text-shadow: 2px 2px 4px #000;
-            text-align: center; max-width: 80%; z-index: 1000;
+            text-align: center; max-width: 80%;
         }
         canvas { display: block; width: 100vw; height: 100vh; }
     </style>
 </head>
 <body>
 
-    <div id="ai-status">System Status: Ready. Paste key and click button.</div>
+    <div id="ai-status">System Status: Ready.</div>
     
     <div id="ui-container">
         <input type="password" id="key-input" placeholder="Paste Gemini API Key Here">
-        <!-- Button starts completely active so you control exactly when hardware starts -->
         <button id="xr-button">Start AR App</button>
     </div>
     
@@ -109,21 +108,20 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// --- 1. EXPLICIT INTERACTION CLICK FOR CAMERA ACQUISITION ---
+// --- 1. REPAIRED CLICK LISTENER ---
 xrButton.addEventListener('click', async () => {
     if (xrSession) {
         xrSession.end();
         return;
     }
     
-    showStatus("Requesting Camera Permissions...", 5000);
+    showStatus("Accessing Camera...", 5000);
     xrButton.disabled = true;
     
     videoElement = document.createElement('video');
     videoElement.autoplay = true;
     videoElement.playsInline = true;
 
-    // Use a completely unconstrained media fallback list
     const configurations = [
         { video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
         { video: { facingMode: "environment" } },
@@ -131,23 +129,19 @@ xrButton.addEventListener('click', async () => {
     ];
 
     let stream = null;
-    let lastError = null;
 
     for (let config of configurations) {
         try {
             stream = await navigator.mediaDevices.getUserMedia(config);
             if (stream) break;
         } catch (e) {
-            lastError = e;
-            console.warn("Configuration rejected, trying fallback structure...", e);
+            console.warn("Skipping failed media profile structure.");
         }
     }
 
-    // Explicitly handle failure instead of hanging on loading text
     if (!stream) {
         xrButton.disabled = false;
-        xrButton.textContent = "Start AR App";
-        showStatus("CAMERA ERROR: " + (lastError ? lastError.name : "Blocked") + ". Ensure HTTPS is used.", 15000);
+        showStatus("CAMERA FAILURE: Access Denied. Make sure to use HTTPS.", 10000);
         return;
     }
 
@@ -155,17 +149,17 @@ xrButton.addEventListener('click', async () => {
     
     videoElement.onloadedmetadata = () => {
         videoElement.play();
-        showStatus("Camera Stream Playing. Starting WebXR Layer...", 3000);
+        showStatus("Initializing Graphics System...", 3000);
         setupWebGLAndXR();
     };
 });
 
-// --- 2. COMPILE WEBGL GRAPHICS ENVIRONMENT ---
+// --- 2. GRAPHICS PIPELINE INTIALIZATION ---
 function setupWebGLAndXR() {
     gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: false, antialias: false });
     
     if (!gl) {
-        showStatus("WebGL2 not supported on this browser.", 10000);
+        showStatus("WebGL2 not supported.", 10000);
         return;
     }
 
@@ -196,10 +190,10 @@ function setupWebGLAndXR() {
     launchXRSession();
 }
 
-// --- 3. RUN PERMISSION SELECTION HANDSHAKES ---
+// --- 3. WEBXR SESSION HANDSHAKE ---
 function launchXRSession() {
     if (!navigator.xr) {
-        showStatus("WebXR hardware module not found on this browser.", 10000);
+        showStatus("WebXR Not Found.", 10000);
         xrButton.disabled = false;
         return;
     }
@@ -219,16 +213,15 @@ function launchXRSession() {
         });
     }).catch(err => {
         xrButton.disabled = false;
-        xrButton.textContent = "Start AR App";
-        showStatus("WebXR Session Initialization Failed. Open in Chrome mobile.", 10000);
+        showStatus("WebXR Initialization Blocked. Open link inside Chrome Mobile.", 10000);
         console.error(err);
     });
 }
 
-// --- INPUT LISTENERS (PS4) ---
+// --- INPUT HANDLERS (PS4) ---
 window.addEventListener("gamepadconnected", (e) => {
     ps4ControllerIndex = e.gamepad.index;
-    showStatus("PS4 Controller Paired!", 3000);
+    showStatus("PS4 Controller Connected!", 3000);
 });
 
 function pollPS4Controller() {
@@ -237,14 +230,14 @@ function pollPS4Controller() {
     const gp = gamepads[ps4ControllerIndex];
     if (!gp) return;
     
-    if (gp.buttons[0].pressed && !aiDebounce) { // Secure array access mapping 
+    if (gp.buttons[0].pressed && !aiDebounce) { // Secure button array reading mapping
         aiDebounce = true;
         generate3DContentAI();
         setTimeout(() => { aiDebounce = false; }, 5000); 
     }
 }
 
-// --- GEMINI DIRECT CONNECT INTERACTION ---
+// --- GEMINI REST CONNECT TRANSACTION ---
 async function generate3DContentAI() {
     const apiKey = keyInput.value.trim();
     if (!apiKey) { showStatus("Please enter your Gemini API Key!", 4000); return; }
@@ -256,3 +249,7 @@ async function generate3DContentAI() {
     const base64Data = captureCanvas.toDataURL('image/jpeg', 0.6).split(',');
 
     const url = `https://googleapis.com{apiKey}`;
+    const prompt = 'Analyze the image. Generate a pure valid raw JSON array of objects representing 3D bounding cubes to overlay on objects in the frame. Do not include markdown codeblocks or ```json wrappings. Use this exact syntax format: [{"color":[1.0,0.0,0.0], "position":[0.0,0.0,-1.5], "scale":[0.2,0.2,0.2]}]. Position rules: Z value must be between -1.0 and -3.0, X between -0.5 and 0.5, Y between -0.5 and 0.5.';
+    const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }] };
+
+    try {
