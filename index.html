@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Samsung A21s Stereo WebAR AI Engine</title>
+    <title>Samsung A21s Fixed WebAR Engine</title>
     <style>
         body, html { 
             margin: 0; padding: 0; width: 100%; height: 100%; 
@@ -43,7 +43,7 @@
     <canvas id="webgl-canvas"></canvas>
 
 <script>
-// --- SHADERS FOR SAMSUNG A21S ---
+// --- SHADERS FOR ULTRA-WIDE DISPLAYS ---
 const videoVS = `#version 300 es
     in vec2 position;
     out vec2 vUV;
@@ -69,11 +69,32 @@ const videoFS = `#version 300 es
     }
 `;
 
+const objectVS = `#version 300 es
+    in vec3 position;
+    uniform mat4 uModel;
+    uniform mat4 uView;
+    uniform mat4 uProjection;
+    void main() {
+        gl_Position = uProjection * uView * uModel * vec4(position, 1.0);
+    }
+`;
+
+const objectFS = `#version 300 es
+    precision highp float;
+    uniform vec3 uColor;
+    out vec4 fragColor;
+    void main() {
+        fragColor = vec4(uColor, 1.0);
+    }
+`;
+
 let gl, xrSession, xrRefSpace;
 let videoElement, videoTexture;
 let videoProgram, quadVAO, scaleUniformLocation;
+let objectProgram, cubeVAO;
 let ps4ControllerIndex = null;
 let aiDebounce = false;
+let generatedObjects = [];
 
 const canvas = document.getElementById('webgl-canvas');
 const xrButton = document.getElementById('xr-button');
@@ -87,67 +108,95 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// --- 1. INITIALIZE ENGINE & HARDWARE ---
+// --- 1. ROBUST SELF-CORRECTING CAMERA INITIALIZATION ---
 async function initEngine() {
-    try {
-        videoElement = document.createElement('video');
-        videoElement.autoplay = true;
-        videoElement.playsInline = true;
-        
-        const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }
-        });
-        videoElement.srcObject = stream;
-        await videoElement.play();
-        
-        xrButton.textContent = "Enter Stereo AR";
-        checkXRSupport();
-    } catch (err) {
-        xrButton.textContent = "Camera Error";
-        console.error(err);
+    videoElement = document.createElement('video');
+    videoElement.autoplay = true;
+    videoElement.playsInline = true;
+
+    // List of hardware profile templates to step through if the device fails initialization
+    const configurations = [
+        { video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
+        { video: { facingMode: { exact: "environment" } } },
+        { video: true } 
+    ];
+
+    let stream = null;
+    for (let config of configurations) {
+        try {
+            stream = await navigator.mediaDevices.getUserMedia(config);
+            if (stream) break; // Found a valid configuration template
+        } catch (e) {
+            console.warn("Retrying alternate camera layout matrix setup...", e);
+        }
     }
 
+    if (!stream) {
+        xrButton.textContent = "Camera Blocked / Check HTTPS";
+        showStatus("CRITICAL ERROR: No camera hardware could be attached.", 10000);
+        return;
+    }
+
+    videoElement.srcObject = stream;
+    
+    // Ensure the stream is actively playing before modifying buttons
+    videoElement.addEventListener('loadedmetadata', () => {
+        xrButton.textContent = "Enter Stereo AR";
+        xrButton.disabled = false;
+        checkXRSupport();
+    });
+
     gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: false, antialias: false });
-    setupVideoShaders();
+    setupShaders();
+    setup3DGeometry();
 }
 
-function setupVideoShaders() {
-    const vs = gl.createShader(gl.VERTEX_SHADER);
-    gl.shaderSource(vs, videoVS); gl.compileShader(vs);
-    const fs = gl.createShader(gl.FRAGMENT_SHADER);
-    gl.shaderSource(fs, videoFS); gl.compileShader(fs);
-
-    videoProgram = gl.createProgram();
-    gl.attachShader(videoProgram, vs); gl.attachShader(videoProgram, fs);
-    gl.linkProgram(videoProgram);
-
+function setupShaders() {
+    const vVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vVs, videoVS); gl.compileShader(vVs);
+    const vFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(vFs, videoFS); gl.compileShader(vFs);
+    videoProgram = gl.createProgram(); gl.attachShader(videoProgram, vVs); gl.attachShader(videoProgram, vFs); gl.linkProgram(videoProgram);
     scaleUniformLocation = gl.getUniformLocation(videoProgram, "uScale");
-    const vertices = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
 
+    const oVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(oVs, objectVS); gl.compileShader(oVs);
+    const oFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(oFs, objectFS); gl.compileShader(oFs);
+    objectProgram = gl.createProgram(); gl.attachShader(objectProgram, oVs); gl.attachShader(objectProgram, oFs); gl.linkProgram(objectProgram);
+}
+
+function setup3DGeometry() {
+    const quadVertices = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
     quadVAO = gl.createVertexArray();
     gl.bindVertexArray(quadVAO);
-    const vbo = gl.createBuffer();
-    gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
-    gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);
-    
-    const posLoc = gl.getAttribLocation(videoProgram, "position");
-    gl.enableVertexAttribArray(posLoc);
-    gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+    let qVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, qVbo); gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
+    let posLoc = gl.getAttribLocation(videoProgram, "position"); gl.enableVertexAttribArray(posLoc); gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
+
+    // Simple Cube Vertices and Indexes
+    const cubeVertices = new Float32Array([
+        -0.1,-0.1,-0.1,  0.1,-0.1,-0.1,  0.1, 0.1,-0.1, -0.1, 0.1,-0.1,
+        -0.1,-0.1, 0.1,  0.1,-0.1, 0.1,  0.1, 0.1, 0.1, -0.1, 0.1, 0.1
+    ]);
+    const cubeIndices = new Uint16Array([
+        0,1,2, 2,3,0,  4,5,6, 6,7,4,  3,2,6, 6,7,3,
+        0,1,5, 5,4,0,  1,2,6, 6,5,1,  0,3,7, 7,4,0
+    ]);
+
+    cubeVAO = gl.createVertexArray();
+    gl.bindVertexArray(cubeVAO);
+    let cVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cVbo); gl.bufferData(gl.ARRAY_BUFFER, cubeVertices, gl.STATIC_DRAW);
+    let cEbo = gl.createBuffer(); gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, cEbo); gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, cubeIndices, gl.STATIC_DRAW);
+    let oPosLoc = gl.getAttribLocation(objectProgram, "position"); gl.enableVertexAttribArray(oPosLoc); gl.vertexAttribPointer(oPosLoc, 3, gl.FLOAT, false, 0, 0);
 
     videoTexture = gl.createTexture();
     gl.bindTexture(gl.TEXTURE_2D, videoTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 }
 
-// --- 2. GAMEPAD DETECTION (PS4) ---
+// --- 2. INPUT MANAGMENT (PS4) ---
 window.addEventListener("gamepadconnected", (e) => {
     const id = e.gamepad.id.toLowerCase();
-    if (id.includes("wireless controller") || id.includes("dualshock") || id.includes("sony")) {
+    if (id.includes("wireless") || id.includes("dualshock") || id.includes("sony") || e.gamepad.mapping === "standard") {
         ps4ControllerIndex = e.gamepad.index;
-        showStatus("PS4 Controller Paired!", 3000);
+        showStatus("PS4 Controller Paired Successfully!", 3000);
     }
 });
 
@@ -157,119 +206,41 @@ window.addEventListener("gamepaddisconnected", (e) => {
 
 function pollPS4Controller() {
     if (ps4ControllerIndex === null) return;
-    const gamepads = navigator.getGamepads();
-    const gp = gamepads[ps4ControllerIndex];
+    const gp = navigator.getGamepads()[ps4ControllerIndex];
     if (!gp) return;
 
-    // Map the PS4 'X' (Cross) button (Index 0 in standard mapping)
-    const crossPressed = gp.buttons[0].pressed;
-
-    if (crossPressed && !aiDebounce) {
+    // Check button maps for index 0 (X button)
+    if (gp.buttons[0].pressed && !aiDebounce) { 
         aiDebounce = true;
-        analyzeCameraFrame();
-        setTimeout(() => { aiDebounce = false; }, 4000); // 4-second delay cooldown
+        generate3DContentAI();
+        setTimeout(() => { aiDebounce = false; }, 5000); 
     }
 }
 
-// --- 3. GENERATIVE AI FRAME ANALYSIS ---
-async function analyzeCameraFrame() {
+// --- 3. AI RESPONSIVENESS CAPTURE ENGINE ---
+async function generate3DContentAI() {
     const apiKey = keyInput.value.trim();
     if (!apiKey) {
-        showStatus("ERROR: Please paste your Gemini API Key first!", 4000);
+        showStatus("Please enter your Gemini API Key!", 4000);
         return;
     }
 
-    showStatus("AI is processing the frame...", 10000);
+    showStatus("AI analyzing frame...", 15000);
 
-    // Grab a clean frame from the active camera
     const captureCanvas = document.createElement('canvas');
-    captureCanvas.width = 640; // Reduced resolution for faster upload speed over mobile data
-    captureCanvas.height = 480;
-    const ctx = captureCanvas.getContext('2d');
-    ctx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
-    
-    // Extract base64 image data string
+    captureCanvas.width = 640; captureCanvas.height = 480;
+    captureCanvas.getContext('2d').drawImage(videoElement, 0, 0, 640, 480);
     const base64Data = captureCanvas.toDataURL('image/jpeg', 0.6).split(',')[1];
 
-    // Direct Browser Request payload structure for Google Gemini 2.5 Flash
     const url = `https://googleapis.com{apiKey}`;
+    const prompt = 'Analyze the image. Generate a pure valid raw JSON array of objects representing 3D bounding cubes to overlay on objects in the frame. Do not include markdown codeblocks or ```json wrappings. Use this exact syntax format: [{"color":[1.0,0.0,0.0], "position":[0.0,0.0,-1.5], "scale":[0.2,0.2,0.2]}]. Position rules: Z value must be between -1.0 and -3.0, X between -0.5 and 0.5, Y between -0.5 and 0.5.';
+
     const payload = {
-        contents: [{
-            parts: [
-                { text: "Describe what is directly in front of this camera in exactly one short sentence for an AR overlay." },
-                { inlineData: { mimeType: "image/jpeg", data: base64Data } }
-            ]
-        }]
+        contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }]
     };
 
     try {
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(payload)
-        });
+        const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
         const data = await response.json();
-        const aiResponseText = data.candidates[0].content.parts[0].text;
-        showStatus("AI: " + aiResponseText, 8000);
-    } catch (err) {
-        showStatus("AI Error: Generation failed or bad Key", 4000);
-        console.error(err);
-    }
-}
-
-function showStatus(text, duration) {
-    aiStatus.textContent = text;
-    aiStatus.style.display = "block";
-    if(duration) {
-        clearTimeout(window.statusTimeout);
-        window.statusTimeout = setTimeout(() => { aiStatus.style.display = "none"; }, duration);
-    }
-}
-
-// --- 4. XR SESSION MANAGEMENT & LOOP ---
-async function checkXRSupport() {
-    if (navigator.xr && await navigator.xr.isSessionSupported('immersive-vr')) {
-        xrButton.disabled = false;
-        xrButton.addEventListener('click', onButtonClicked);
-    } else {
-        xrButton.textContent = "Stereo Mode Unsupported";
-    }
-}
-
-function onButtonClicked() {
-    if (!xrSession) {
-        navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] }).then(session => {
-            xrSession = session;
-            xrButton.textContent = "Exit AR";
-            document.getElementById('ui-container').style.display = "none"; // Hide inputs when inside headset view
-            
-            const xrWebGLLayer = new XRWebGLLayer(xrSession, gl);
-            xrSession.updateRenderState({ baseLayer: xrWebGLLayer });
-            
-            xrSession.requestReferenceSpace('local').then(refSpace => {
-                xrRefSpace = refSpace;
-                xrSession.requestAnimationFrame(onXRFrame);
-            });
-        });
-    } else {
-        xrSession.end();
-    }
-}
-
-function onXRFrame(time, frame) {
-    frame.session.requestAnimationFrame(onXRFrame);
-    const pose = frame.getViewerPose(xrRefSpace);
-    if (!pose) return;
-
-    pollPS4Controller(); // Run controller check every frame
-
-    const layer = frame.session.renderState.baseLayer;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
-    gl.clearDepth(1.0);
-    gl.clear(gl.DEPTH_BUFFER_BIT);
-
-    gl.bindTexture(gl.TEXTURE_2D, videoTexture);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, videoElement);
-
-    for (const view of pose.views) {
-        const viewport = layer.getViewport(view);
+        let rawText = data.candidates[0].content.parts[0].text;
+        
