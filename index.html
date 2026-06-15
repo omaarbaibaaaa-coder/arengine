@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>A21s Fixed Sequential Engine</title>
+    <title>A21s Safe Click WebAR Engine</title>
     <style>
         body, html { 
             margin: 0; padding: 0; width: 100%; height: 100%; 
@@ -26,17 +26,18 @@
         #ai-status {
             position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
             color: #00ffcc; font-weight: bold; z-index: 999; text-shadow: 2px 2px 4px #000;
-            text-align: center; max-width: 80%; pointer-events: none; display: none;
+            text-align: center; max-width: 80%; z-index: 1000;
         }
         canvas { display: block; width: 100vw; height: 100vh; }
     </style>
 </head>
 <body>
 
-    <div id="ai-status">AI Status: Idle</div>
+    <div id="ai-status">System Status: Ready. Paste key and click button.</div>
     
     <div id="ui-container">
         <input type="password" id="key-input" placeholder="Paste Gemini API Key Here">
+        <!-- Button starts completely active so you control exactly when hardware starts -->
         <button id="xr-button">Start AR App</button>
     </div>
     
@@ -108,40 +109,45 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// --- STEP 1: INTERACTIVE USER CLICK HANDLER ---
+// --- 1. EXPLICIT INTERACTION CLICK FOR CAMERA ACQUISITION ---
 xrButton.addEventListener('click', async () => {
     if (xrSession) {
         xrSession.end();
         return;
     }
     
+    showStatus("Requesting Camera Permissions...", 5000);
     xrButton.disabled = true;
-    xrButton.textContent = "Accessing Camera...";
     
     videoElement = document.createElement('video');
     videoElement.autoplay = true;
     videoElement.playsInline = true;
 
-    const constraints = [
+    // Use a completely unconstrained media fallback list
+    const configurations = [
         { video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
         { video: { facingMode: "environment" } },
         { video: true }
     ];
 
     let stream = null;
-    for (let config of constraints) {
+    let lastError = null;
+
+    for (let config of configurations) {
         try {
             stream = await navigator.mediaDevices.getUserMedia(config);
             if (stream) break;
         } catch (e) {
-            console.warn("Camera layout rejected, retrying next configuration profile...", e);
+            lastError = e;
+            console.warn("Configuration rejected, trying fallback structure...", e);
         }
     }
 
+    // Explicitly handle failure instead of hanging on loading text
     if (!stream) {
-        xrButton.textContent = "Error: Camera Blocked";
         xrButton.disabled = false;
-        showStatus("ERROR: Camera access denied. Check your site permissions or HTTPS URL.", 10000);
+        xrButton.textContent = "Start AR App";
+        showStatus("CAMERA ERROR: " + (lastError ? lastError.name : "Blocked") + ". Ensure HTTPS is used.", 15000);
         return;
     }
 
@@ -149,11 +155,12 @@ xrButton.addEventListener('click', async () => {
     
     videoElement.onloadedmetadata = () => {
         videoElement.play();
+        showStatus("Camera Stream Playing. Starting WebXR Layer...", 3000);
         setupWebGLAndXR();
     };
 });
 
-// --- STEP 2: INITIALIZE WEBGL GRAPHICS CONTEXT ---
+// --- 2. COMPILE WEBGL GRAPHICS ENVIRONMENT ---
 function setupWebGLAndXR() {
     gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: false, antialias: false });
     
@@ -162,24 +169,20 @@ function setupWebGLAndXR() {
         return;
     }
 
-    // Compile background shaders
     const vVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vVs, videoVS); gl.compileShader(vVs);
     const vFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(vFs, videoFS); gl.compileShader(vFs);
     videoProgram = gl.createProgram(); gl.attachShader(videoProgram, vVs); gl.attachShader(videoProgram, vFs); gl.linkProgram(videoProgram);
     scaleUniformLocation = gl.getUniformLocation(videoProgram, "uScale");
 
-    // Compile 3D object shaders
     const oVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(oVs, objectVS); gl.compileShader(oVs);
     const oFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(oFs, objectFS); gl.compileShader(oFs);
     objectProgram = gl.createProgram(); gl.attachShader(objectProgram, oVs); gl.attachShader(objectProgram, oFs); gl.linkProgram(objectProgram);
 
-    // Quad Background Mapping
     const quadVertices = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
     quadVAO = gl.createVertexArray(); gl.bindVertexArray(quadVAO);
     let qVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, qVbo); gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
     let posLoc = gl.getAttribLocation(videoProgram, "position"); gl.enableVertexAttribArray(posLoc); gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    // 3D Box Coordinates
     const cubeVertices = new Float32Array([-0.1,-0.1,-0.1,  0.1,-0.1,-0.1,  0.1, 0.1,-0.1, -0.1, 0.1,-0.1, -0.1,-0.1, 0.1,  0.1,-0.1, 0.1,  0.1, 0.1, 0.1, -0.1, 0.1, 0.1]);
     cubeVAO = gl.createVertexArray(); gl.bindVertexArray(cubeVAO);
     let cVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cVbo); gl.bufferData(gl.ARRAY_BUFFER, cubeVertices, gl.STATIC_DRAW);
@@ -190,16 +193,14 @@ function setupWebGLAndXR() {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 
-    // Forward straight into the WebXR permission request
     launchXRSession();
 }
 
-// --- STEP 3: FIRE UP THE WEBXR HANDSHAKE LOOP ---
+// --- 3. RUN PERMISSION SELECTION HANDSHAKES ---
 function launchXRSession() {
     if (!navigator.xr) {
         showStatus("WebXR hardware module not found on this browser.", 10000);
         xrButton.disabled = false;
-        xrButton.textContent = "Start AR App";
         return;
     }
 
@@ -217,14 +218,14 @@ function launchXRSession() {
             xrSession.requestAnimationFrame(onXRFrame);
         });
     }).catch(err => {
-        xrButton.textContent = "Start AR App";
         xrButton.disabled = false;
-        showStatus("WebXR Access Failed: Ensure you are testing using Google Chrome.", 10000);
+        xrButton.textContent = "Start AR App";
+        showStatus("WebXR Session Initialization Failed. Open in Chrome mobile.", 10000);
         console.error(err);
     });
 }
 
-// --- PS4 CONTROLLER INPUT HANDLER ---
+// --- INPUT LISTENERS (PS4) ---
 window.addEventListener("gamepadconnected", (e) => {
     ps4ControllerIndex = e.gamepad.index;
     showStatus("PS4 Controller Paired!", 3000);
@@ -236,15 +237,14 @@ function pollPS4Controller() {
     const gp = gamepads[ps4ControllerIndex];
     if (!gp) return;
     
-    // Fixed typo: uses standard button pressed event arrays
-    if (gp.buttons[0].pressed && !aiDebounce) { 
+    if (gp.buttons[0].pressed && !aiDebounce) { // Secure array access mapping 
         aiDebounce = true;
         generate3DContentAI();
         setTimeout(() => { aiDebounce = false; }, 5000); 
     }
 }
 
-// --- DIRECT GEMINI API INTEGRATION ---
+// --- GEMINI DIRECT CONNECT INTERACTION ---
 async function generate3DContentAI() {
     const apiKey = keyInput.value.trim();
     if (!apiKey) { showStatus("Please enter your Gemini API Key!", 4000); return; }
@@ -256,5 +256,3 @@ async function generate3DContentAI() {
     const base64Data = captureCanvas.toDataURL('image/jpeg', 0.6).split(',');
 
     const url = `https://googleapis.com{apiKey}`;
-
-    
