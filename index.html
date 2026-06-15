@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>A21s Fixed Sequential Engine</title>
+    <title>A21s Ultimate Stereo WebAR AI Engine</title>
     <style>
         body, html { 
             margin: 0; padding: 0; width: 100%; height: 100%; 
@@ -33,7 +33,7 @@
 </head>
 <body>
 
-    <div id="ai-status">System Status: Ready.</div>
+    <div id="ai-status">System Status: Ready. Paste Key and Tap Start.</div>
     
     <div id="ui-container">
         <input type="password" id="key-input" placeholder="Paste Gemini API Key Here">
@@ -43,7 +43,7 @@
     <canvas id="webgl-canvas"></canvas>
 
 <script>
-// --- SHADERS ---
+// --- WEBGL SHADERS ---
 const videoVS = `#version 300 es
     in vec2 position;
     out vec2 vUV;
@@ -108,76 +108,78 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
-// --- 1. REPAIRED CLICK LISTENER ---
+// --- STEP 1: FORCE INSTANT USER ACTION TO TRIGGER HARDWARE RESOURCING ---
 xrButton.addEventListener('click', async () => {
     if (xrSession) {
         xrSession.end();
         return;
     }
     
-    showStatus("Accessing Camera...", 5000);
     xrButton.disabled = true;
+    showStatus("Connecting to Camera...", 5000);
     
     videoElement = document.createElement('video');
     videoElement.autoplay = true;
     videoElement.playsInline = true;
 
-    const configurations = [
-        { video: { facingMode: "environment", width: { ideal: 1280 }, height: { ideal: 720 } } },
-        { video: { facingMode: "environment" } },
-        { video: true }
-    ];
-
-    let stream = null;
-
-    for (let config of configurations) {
-        try {
-            stream = await navigator.mediaDevices.getUserMedia(config);
-            if (stream) break;
-        } catch (e) {
-            console.warn("Skipping failed media profile structure.");
-        }
-    }
-
-    if (!stream) {
+    try {
+        // Direct request without loops so the Samsung security policy approves it instantly
+        const stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "environment" }
+        });
+        
+        videoElement.srcObject = stream;
+        
+        // Wait for device resolution matrices to populate
+        videoElement.onloadedmetadata = () => {
+            videoElement.play();
+            showStatus("Camera OK! Booting Graphics Layer...", 3000);
+            setupWebGLAndXR();
+        };
+        
+    } catch (err) {
         xrButton.disabled = false;
-        showStatus("CAMERA FAILURE: Access Denied. Make sure to use HTTPS.", 10000);
-        return;
+        showStatus("CAMERA REJECTED: Make sure you are using an HTTPS URL link!", 15000);
+        console.error(err);
     }
-
-    videoElement.srcObject = stream;
-    
-    videoElement.onloadedmetadata = () => {
-        videoElement.play();
-        showStatus("Initializing Graphics System...", 3000);
-        setupWebGLAndXR();
-    };
 });
 
-// --- 2. GRAPHICS PIPELINE INTIALIZATION ---
+// --- STEP 2: SETUP WEBGL ENVIRONMENT CONTEXTS ---
 function setupWebGLAndXR() {
     gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: false, antialias: false });
     
     if (!gl) {
-        showStatus("WebGL2 not supported.", 10000);
+        showStatus("WebGL2 configuration failed.", 10000);
         return;
     }
 
+    // Background Shaders Compile
     const vVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vVs, videoVS); gl.compileShader(vVs);
     const vFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(vFs, videoFS); gl.compileShader(vFs);
     videoProgram = gl.createProgram(); gl.attachShader(videoProgram, vVs); gl.attachShader(videoProgram, vFs); gl.linkProgram(videoProgram);
     scaleUniformLocation = gl.getUniformLocation(videoProgram, "uScale");
 
+    // Object Shaders Compile
     const oVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(oVs, objectVS); gl.compileShader(oVs);
     const oFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(oFs, objectFS); gl.compileShader(oFs);
     objectProgram = gl.createProgram(); gl.attachShader(objectProgram, oVs); gl.attachShader(objectProgram, oFs); gl.linkProgram(objectProgram);
 
+    // Build Backdrop Mesh (Quad Coordinates)
     const quadVertices = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
     quadVAO = gl.createVertexArray(); gl.bindVertexArray(quadVAO);
     let qVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, qVbo); gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
     let posLoc = gl.getAttribLocation(videoProgram, "position"); gl.enableVertexAttribArray(posLoc); gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
 
-    const cubeVertices = new Float32Array([-0.1,-0.1,-0.1,  0.1,-0.1,-0.1,  0.1, 0.1,-0.1, -0.1, 0.1,-0.1, -0.1,-0.1, 0.1,  0.1,-0.1, 0.1,  0.1, 0.1, 0.1, -0.1, 0.1, 0.1]);
+    // Build 3D Unit Mesh Box (Solid Triangles without Element Buffers for speed)
+    const cubeVertices = new Float32Array([
+        -0.1,-0.1,-0.1,  0.1,-0.1,-0.1,  0.1, 0.1,-0.1, -0.1,-0.1,-0.1,  0.1, 0.1,-0.1, -0.1, 0.1,-0.1,
+        -0.1,-0.1, 0.1,  0.1,-0.1, 0.1,  0.1, 0.1, 0.1, -0.1,-0.1, 0.1,  0.1, 0.1, 0.1, -0.1, 0.1, 0.1,
+        -0.1, 0.1, 0.1, -0.1, 0.1,-0.1, -0.1,-0.1,-0.1, -0.1, 0.1, 0.1, -0.1,-0.1,-0.1, -0.1,-0.1, 0.1,
+         0.1, 0.1, 0.1,  0.1, 0.1,-0.1,  0.1,-0.1,-0.1,  0.1, 0.1, 0.1,  0.1,-0.1,-0.1,  0.1,-0.1, 0.1,
+        -0.1,-0.1,-0.1,  0.1,-0.1,-0.1,  0.1,-0.1, 0.1, -0.1,-0.1,-0.1,  0.1,-0.1, 0.1, -0.1,-0.1, 0.1,
+        -0.1, 0.1,-0.1,  0.1, 0.1,-0.1,  0.1, 0.1, 0.1, -0.1, 0.1,-0.1,  0.1, 0.1, 0.1, -0.1, 0.1, 0.1
+    ]);
+
     cubeVAO = gl.createVertexArray(); gl.bindVertexArray(cubeVAO);
     let cVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cVbo); gl.bufferData(gl.ARRAY_BUFFER, cubeVertices, gl.STATIC_DRAW);
     let oPosLoc = gl.getAttribLocation(objectProgram, "position"); gl.enableVertexAttribArray(oPosLoc); gl.vertexAttribPointer(oPosLoc, 3, gl.FLOAT, false, 0, 0);
@@ -190,10 +192,10 @@ function setupWebGLAndXR() {
     launchXRSession();
 }
 
-// --- 3. WEBXR SESSION HANDSHAKE ---
+// --- STEP 3: INITIALIZE THE WEBXR STEREO CONTAINER VIEWPORT ---
 function launchXRSession() {
     if (!navigator.xr) {
-        showStatus("WebXR Not Found.", 10000);
+        showStatus("WebXR feature missing. Open inside Android Chrome app.", 10000);
         xrButton.disabled = false;
         return;
     }
@@ -213,15 +215,15 @@ function launchXRSession() {
         });
     }).catch(err => {
         xrButton.disabled = false;
-        showStatus("WebXR Initialization Blocked. Open link inside Chrome Mobile.", 10000);
+        showStatus("WebXR Blocked. Check your browser VR tracking permissions.", 10000);
         console.error(err);
     });
 }
 
-// --- INPUT HANDLERS (PS4) ---
+// --- INPUT CONTROL HANDLING (PS4 PAD OVER WIRELESS BLUETOOTH) ---
 window.addEventListener("gamepadconnected", (e) => {
     ps4ControllerIndex = e.gamepad.index;
-    showStatus("PS4 Controller Connected!", 3000);
+    showStatus("PS4 Gamepad detected and mapped!", 3000);
 });
 
 function pollPS4Controller() {
@@ -230,26 +232,19 @@ function pollPS4Controller() {
     const gp = gamepads[ps4ControllerIndex];
     if (!gp) return;
     
-    if (gp.buttons[0].pressed && !aiDebounce) { // Secure button array reading mapping
+    // Check if index 0 (Cross / X Button) is held down
+    if (gp.buttons && gp.buttons[0] && gp.buttons[0].pressed && !aiDebounce) { 
         aiDebounce = true;
         generate3DContentAI();
         setTimeout(() => { aiDebounce = false; }, 5000); 
     }
 }
 
-// --- GEMINI REST CONNECT TRANSACTION ---
+// --- GENERATIVE AI GEMINI TRANSACTIONS ---
 async function generate3DContentAI() {
     const apiKey = keyInput.value.trim();
-    if (!apiKey) { showStatus("Please enter your Gemini API Key!", 4000); return; }
-    showStatus("AI analyzing frame...", 15000);
+    if (!apiKey) { showStatus("ERROR: Input your API key before placing shapes!", 4000); return; }
+    showStatus("AI analyzing room data...", 15000);
 
     const captureCanvas = document.createElement('canvas');
     captureCanvas.width = 640; captureCanvas.height = 480;
-    captureCanvas.getContext('2d').drawImage(videoElement, 0, 0, 640, 480);
-    const base64Data = captureCanvas.toDataURL('image/jpeg', 0.6).split(',');
-
-    const url = `https://googleapis.com{apiKey}`;
-    const prompt = 'Analyze the image. Generate a pure valid raw JSON array of objects representing 3D bounding cubes to overlay on objects in the frame. Do not include markdown codeblocks or ```json wrappings. Use this exact syntax format: [{"color":[1.0,0.0,0.0], "position":[0.0,0.0,-1.5], "scale":[0.2,0.2,0.2]}]. Position rules: Z value must be between -1.0 and -3.0, X between -0.5 and 0.5, Y between -0.5 and 0.5.';
-    const payload = { contents: [{ parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: base64Data } }] }] };
-
-    try {
