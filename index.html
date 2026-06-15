@@ -3,47 +3,47 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>Samsung A21s WebAR Engine</title>
+    <title>Samsung A21s Stereo WebAR AI Engine</title>
     <style>
         body, html { 
-            margin: 0; 
-            padding: 0; 
-            width: 100%; 
-            height: 100%; 
-            overflow: hidden; 
-            background-color: #000; 
-            position: fixed; 
+            margin: 0; padding: 0; width: 100%; height: 100%; 
+            overflow: hidden; background-color: #000; position: fixed; 
+            font-family: sans-serif;
+        }
+        #ui-container {
+            position: absolute; bottom: 25px; left: 50%; 
+            transform: translateX(-50%); z-index: 999;
+            display: flex; flex-direction: column; align-items: center; gap: 10px;
         }
         #xr-button { 
-            position: absolute; 
-            bottom: 25px; 
-            left: 50%; 
-            transform: translateX(-50%); 
-            padding: 14px 28px; 
-            background: #00bcd4; 
-            color: white; 
-            border: none; 
-            border-radius: 8px; 
-            font-weight: bold; 
-            cursor: pointer; 
-            z-index: 999; 
+            padding: 14px 28px; background: #00bcd4; color: white; 
+            border: none; border-radius: 8px; font-weight: bold; cursor: pointer; 
         }
-        canvas { 
-            display: block; 
-            width: 100vw; 
-            height: 100vh; 
+        #key-input {
+            padding: 8px; border-radius: 4px; border: 1px solid #333;
+            background: #222; color: #fff; width: 200px; text-align: center;
         }
+        #ai-status {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            color: #00ffcc; font-weight: bold; z-index: 999; text-shadow: 2px 2px 4px #000;
+            text-align: center; max-width: 80%; pointer-events: none; display: none;
+        }
+        canvas { display: block; width: 100vw; height: 100vh; }
     </style>
 </head>
 <body>
 
-    <button id="xr-button" disabled>Loading Camera...</button>
+    <div id="ai-status">AI Status: Idle</div>
+    
+    <div id="ui-container">
+        <input type="password" id="key-input" placeholder="Paste Gemini API Key Here">
+        <button id="xr-button" disabled>Loading Camera...</button>
+    </div>
+    
     <canvas id="webgl-canvas"></canvas>
 
 <script>
-// --- SAMSUNG A21s OPTIMIZED SHADERS ---
-// The geometry position multiplier is raised to 1.45 to force the texture map 
-// past the extreme 20:9 viewport restrictions of the Galaxy screen.
+// --- SHADERS FOR SAMSUNG A21S ---
 const videoVS = `#version 300 es
     in vec2 position;
     out vec2 vUV;
@@ -51,8 +51,6 @@ const videoVS = `#version 300 es
     void main() {
         vUV = (position * uScale) * 0.5 + 0.5;
         vUV.y = 1.0 - vUV.y; 
-        
-        // Blow past the native 20:9 WebXR safe-zone border mask
         gl_Position = vec4(position * 1.45, 0.999, 1.0); 
     }
 `;
@@ -63,7 +61,6 @@ const videoFS = `#version 300 es
     uniform sampler2D uVideoTex;
     out vec4 fragColor;
     void main() {
-        // Safe sampling fallback for over-scaled aspect ratios
         if (vUV.x < -0.2 || vUV.x > 1.2 || vUV.y < -0.2 || vUV.y > 1.2) {
             fragColor = vec4(0.0, 0.0, 0.0, 1.0);
         } else {
@@ -74,11 +71,14 @@ const videoFS = `#version 300 es
 
 let gl, xrSession, xrRefSpace;
 let videoElement, videoTexture;
-let videoProgram, quadVAO;
-let scaleUniformLocation;
+let videoProgram, quadVAO, scaleUniformLocation;
+let ps4ControllerIndex = null;
+let aiDebounce = false;
 
 const canvas = document.getElementById('webgl-canvas');
 const xrButton = document.getElementById('xr-button');
+const keyInput = document.getElementById('key-input');
+const aiStatus = document.getElementById('ai-status');
 
 function resizeCanvas() {
     canvas.width = window.innerWidth * window.devicePixelRatio;
@@ -87,13 +87,13 @@ function resizeCanvas() {
 window.addEventListener('resize', resizeCanvas);
 resizeCanvas();
 
+// --- 1. INITIALIZE ENGINE & HARDWARE ---
 async function initEngine() {
     try {
         videoElement = document.createElement('video');
         videoElement.autoplay = true;
         videoElement.playsInline = true;
         
-        // Grab the native 1080p stream from the A21s rear main sensor
         const stream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: { exact: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 } }
         });
@@ -103,7 +103,7 @@ async function initEngine() {
         xrButton.textContent = "Enter Stereo AR";
         checkXRSupport();
     } catch (err) {
-        xrButton.textContent = "Camera Error / No HTTPS";
+        xrButton.textContent = "Camera Error";
         console.error(err);
     }
 
@@ -113,24 +113,16 @@ async function initEngine() {
 
 function setupVideoShaders() {
     const vs = gl.createShader(gl.VERTEX_SHADER);
-    gl.shaderSource(vs, videoVS);
-    gl.compileShader(vs);
-
+    gl.shaderSource(vs, videoVS); gl.compileShader(vs);
     const fs = gl.createShader(gl.FRAGMENT_SHADER);
-    gl.shaderSource(fs, videoFS);
-    gl.compileShader(fs);
+    gl.shaderSource(fs, videoFS); gl.compileShader(fs);
 
     videoProgram = gl.createProgram();
-    gl.attachShader(videoProgram, vs);
-    gl.attachShader(videoProgram, fs);
+    gl.attachShader(videoProgram, vs); gl.attachShader(videoProgram, fs);
     gl.linkProgram(videoProgram);
 
     scaleUniformLocation = gl.getUniformLocation(videoProgram, "uScale");
-
-    const vertices = new Float32Array([
-        -1, -1,  1, -1, -1,  1,
-        -1,  1,  1, -1,  1,  1
-    ]);
+    const vertices = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
 
     quadVAO = gl.createVertexArray();
     gl.bindVertexArray(quadVAO);
@@ -150,27 +142,106 @@ function setupVideoShaders() {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
 }
 
+// --- 2. GAMEPAD DETECTION (PS4) ---
+window.addEventListener("gamepadconnected", (e) => {
+    const id = e.gamepad.id.toLowerCase();
+    if (id.includes("wireless controller") || id.includes("dualshock") || id.includes("sony")) {
+        ps4ControllerIndex = e.gamepad.index;
+        showStatus("PS4 Controller Paired!", 3000);
+    }
+});
+
+window.addEventListener("gamepaddisconnected", (e) => {
+    if (e.gamepad.index === ps4ControllerIndex) ps4ControllerIndex = null;
+});
+
+function pollPS4Controller() {
+    if (ps4ControllerIndex === null) return;
+    const gamepads = navigator.getGamepads();
+    const gp = gamepads[ps4ControllerIndex];
+    if (!gp) return;
+
+    // Map the PS4 'X' (Cross) button (Index 0 in standard mapping)
+    const crossPressed = gp.buttons[0].pressed;
+
+    if (crossPressed && !aiDebounce) {
+        aiDebounce = true;
+        analyzeCameraFrame();
+        setTimeout(() => { aiDebounce = false; }, 4000); // 4-second delay cooldown
+    }
+}
+
+// --- 3. GENERATIVE AI FRAME ANALYSIS ---
+async function analyzeCameraFrame() {
+    const apiKey = keyInput.value.trim();
+    if (!apiKey) {
+        showStatus("ERROR: Please paste your Gemini API Key first!", 4000);
+        return;
+    }
+
+    showStatus("AI is processing the frame...", 10000);
+
+    // Grab a clean frame from the active camera
+    const captureCanvas = document.createElement('canvas');
+    captureCanvas.width = 640; // Reduced resolution for faster upload speed over mobile data
+    captureCanvas.height = 480;
+    const ctx = captureCanvas.getContext('2d');
+    ctx.drawImage(videoElement, 0, 0, captureCanvas.width, captureCanvas.height);
+    
+    // Extract base64 image data string
+    const base64Data = captureCanvas.toDataURL('image/jpeg', 0.6).split(',')[1];
+
+    // Direct Browser Request payload structure for Google Gemini 2.5 Flash
+    const url = `https://googleapis.com{apiKey}`;
+    const payload = {
+        contents: [{
+            parts: [
+                { text: "Describe what is directly in front of this camera in exactly one short sentence for an AR overlay." },
+                { inlineData: { mimeType: "image/jpeg", data: base64Data } }
+            ]
+        }]
+    };
+
+    try {
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+        const data = await response.json();
+        const aiResponseText = data.candidates[0].content.parts[0].text;
+        showStatus("AI: " + aiResponseText, 8000);
+    } catch (err) {
+        showStatus("AI Error: Generation failed or bad Key", 4000);
+        console.error(err);
+    }
+}
+
+function showStatus(text, duration) {
+    aiStatus.textContent = text;
+    aiStatus.style.display = "block";
+    if(duration) {
+        clearTimeout(window.statusTimeout);
+        window.statusTimeout = setTimeout(() => { aiStatus.style.display = "none"; }, duration);
+    }
+}
+
+// --- 4. XR SESSION MANAGEMENT & LOOP ---
 async function checkXRSupport() {
-    if (navigator.xr) {
-        const supported = await navigator.xr.isSessionSupported('immersive-vr');
-        if (supported) {
-            xrButton.disabled = false;
-            xrButton.addEventListener('click', onButtonClicked);
-        } else {
-            xrButton.textContent = "Stereo Mode Unsupported";
-        }
+    if (navigator.xr && await navigator.xr.isSessionSupported('immersive-vr')) {
+        xrButton.disabled = false;
+        xrButton.addEventListener('click', onButtonClicked);
     } else {
-        xrButton.textContent = "WebXR Not Found";
+        xrButton.textContent = "Stereo Mode Unsupported";
     }
 }
 
 function onButtonClicked() {
     if (!xrSession) {
-        navigator.xr.requestSession('immersive-vr', {
-            optionalFeatures: ['local-floor']
-        }).then(session => {
+        navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] }).then(session => {
             xrSession = session;
             xrButton.textContent = "Exit AR";
+            document.getElementById('ui-container').style.display = "none"; // Hide inputs when inside headset view
             
             const xrWebGLLayer = new XRWebGLLayer(xrSession, gl);
             xrSession.updateRenderState({ baseLayer: xrWebGLLayer });
@@ -186,15 +257,14 @@ function onButtonClicked() {
 }
 
 function onXRFrame(time, frame) {
-    const session = frame.session;
-    session.requestAnimationFrame(onXRFrame);
-
+    frame.session.requestAnimationFrame(onXRFrame);
     const pose = frame.getViewerPose(xrRefSpace);
     if (!pose) return;
 
-    const layer = session.renderState.baseLayer;
+    pollPS4Controller(); // Run controller check every frame
+
+    const layer = frame.session.renderState.baseLayer;
     gl.bindFramebuffer(gl.FRAMEBUFFER, layer.framebuffer);
-    
     gl.clearDepth(1.0);
     gl.clear(gl.DEPTH_BUFFER_BIT);
 
@@ -203,33 +273,3 @@ function onXRFrame(time, frame) {
 
     for (const view of pose.views) {
         const viewport = layer.getViewport(view);
-        gl.viewport(viewport.x, viewport.y, viewport.width, viewport.height);
-
-        // Compensating for the 20:9 aspect layout differences
-        const screenAspect = viewport.width / viewport.height;
-        const videoAspect = videoElement.videoWidth / videoElement.videoHeight;
-        
-        let scaleX = 1.0;
-        let scaleY = 1.0;
-
-        if (screenAspect > videoAspect) {
-            scaleY = videoAspect / screenAspect;
-        } else {
-            scaleX = screenAspect / videoAspect;
-        }
-
-        gl.useProgram(videoProgram);
-        gl.uniform2f(scaleUniformLocation, scaleX, scaleY);
-
-        gl.disable(gl.DEPTH_TEST); 
-        gl.bindVertexArray(quadVAO);
-        gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-        gl.enable(gl.DEPTH_TEST);
-    }
-}
-
-initEngine();
-</script>
-</body>
-</html>
