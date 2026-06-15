@@ -1,250 +1,108 @@
 <!DOCTYPE html>
-<html lang="en">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
-    <title>A21s Ultimate Stereo WebAR AI Engine</title>
-    <style>
-        body, html { 
-            margin: 0; padding: 0; width: 100%; height: 100%; 
-            overflow: hidden; background-color: #000; position: fixed; 
-            font-family: sans-serif;
-        }
-        #ui-container {
-            position: absolute; bottom: 25px; left: 50%; 
-            transform: translateX(-50%); z-index: 999;
-            display: flex; flex-direction: column; align-items: center; gap: 10px;
-        }
-        #xr-button { 
-            padding: 14px 28px; background: #00bcd4; color: white; 
-            border: none; border-radius: 8px; font-weight: bold; cursor: pointer; 
-        }
-        #key-input {
-            padding: 8px; border-radius: 4px; border: 1px solid #333;
-            background: #222; color: #fff; width: 200px; text-align: center;
-        }
-        #ai-status {
-            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
-            color: #00ffcc; font-weight: bold; z-index: 999; text-shadow: 2px 2px 4px #000;
-            text-align: center; max-width: 80%;
-        }
-        canvas { display: block; width: 100vw; height: 100vh; }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Simple Camera Overlay</title>
+
+<style>
+html, body {
+    margin: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    background: black;
+}
+
+#camera {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+}
+
+#overlay {
+    position: absolute;
+    width: 100%;
+    height: 100%;
+}
+
+#start {
+    position: absolute;
+    bottom: 20px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 100;
+    padding: 12px 20px;
+}
+</style>
 </head>
+
 <body>
 
-    <div id="ai-status">System Status: Ready. Paste Key and Tap Start.</div>
-    
-    <div id="ui-container">
-        <input type="password" id="key-input" placeholder="Paste Gemini API Key Here">
-        <button id="xr-button">Start AR App</button>
-    </div>
-    
-    <canvas id="webgl-canvas"></canvas>
+<video id="camera" autoplay playsinline></video>
+<canvas id="overlay"></canvas>
+
+<button id="start">Start Camera</button>
 
 <script>
-// --- WEBGL SHADERS ---
-const videoVS = `#version 300 es
-    in vec2 position;
-    out vec2 vUV;
-    uniform vec2 uScale; 
-    void main() {
-        vUV = (position * uScale) * 0.5 + 0.5;
-        vUV.y = 1.0 - vUV.y; 
-        gl_Position = vec4(position * 1.45, 0.999, 1.0); 
-    }
-`;
+const video = document.getElementById("camera");
+const canvas = document.getElementById("overlay");
+const ctx = canvas.getContext("2d");
 
-const videoFS = `#version 300 es
-    precision highp float;
-    in vec2 vUV;
-    uniform sampler2D uVideoTex;
-    out vec4 fragColor;
-    void main() {
-        if (vUV.x < -0.2 || vUV.x > 1.2 || vUV.y < -0.2 || vUV.y > 1.2) {
-            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
-        } else {
-            fragColor = texture(uVideoTex, clamp(vUV, 0.0, 1.0));
-        }
-    }
-`;
+canvas.width = window.innerWidth;
+canvas.height = window.innerHeight;
 
-const objectVS = `#version 300 es
-    in vec3 position;
-    uniform mat4 uModel;
-    uniform mat4 uView;
-    uniform mat4 uProjection;
-    void main() {
-        gl_Position = uProjection * uView * uModel * vec4(position, 1.0);
-    }
-`;
-
-const objectFS = `#version 300 es
-    precision highp float;
-    uniform vec3 uColor;
-    out vec4 fragColor;
-    void main() {
-        fragColor = vec4(uColor, 1.0);
-    }
-`;
-
-let gl, xrSession, xrRefSpace;
-let videoElement, videoTexture;
-let videoProgram, quadVAO, scaleUniformLocation;
-let objectProgram, cubeVAO;
-let ps4ControllerIndex = null;
-let aiDebounce = false;
-let generatedObjects = [];
-
-const canvas = document.getElementById('webgl-canvas');
-const xrButton = document.getElementById('xr-button');
-const keyInput = document.getElementById('key-input');
-const aiStatus = document.getElementById('ai-status');
-
-function resizeCanvas() {
-    canvas.width = window.innerWidth * window.devicePixelRatio;
-    canvas.height = window.innerHeight * window.devicePixelRatio;
-}
-window.addEventListener('resize', resizeCanvas);
-resizeCanvas();
-
-// --- STEP 1: FORCE INSTANT USER ACTION TO TRIGGER HARDWARE RESOURCING ---
-xrButton.addEventListener('click', async () => {
-    if (xrSession) {
-        xrSession.end();
-        return;
-    }
-    
-    xrButton.disabled = true;
-    showStatus("Connecting to Camera...", 5000);
-    
-    videoElement = document.createElement('video');
-    videoElement.autoplay = true;
-    videoElement.playsInline = true;
-
+document.getElementById("start").onclick = async () => {
     try {
-        // Direct request without loops so the Samsung security policy approves it instantly
         const stream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: "environment" }
+            video: {
+                facingMode: "environment"
+            }
         });
-        
-        videoElement.srcObject = stream;
-        
-        // Wait for device resolution matrices to populate
-        videoElement.onloadedmetadata = () => {
-            videoElement.play();
-            showStatus("Camera OK! Booting Graphics Layer...", 3000);
-            setupWebGLAndXR();
-        };
-        
+
+        video.srcObject = stream;
+        animate();
+
     } catch (err) {
-        xrButton.disabled = false;
-        showStatus("CAMERA REJECTED: Make sure you are using an HTTPS URL link!", 15000);
-        console.error(err);
+        alert("Camera failed: " + err.message);
     }
-});
+};
 
-// --- STEP 2: SETUP WEBGL ENVIRONMENT CONTEXTS ---
-function setupWebGLAndXR() {
-    gl = canvas.getContext('webgl2', { xrCompatible: true, alpha: false, antialias: false });
-    
-    if (!gl) {
-        showStatus("WebGL2 configuration failed.", 10000);
-        return;
+const objects = [
+    {
+        x: 200,
+        y: 200,
+        size: 100,
+        color: "red"
     }
+];
 
-    // Background Shaders Compile
-    const vVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(vVs, videoVS); gl.compileShader(vVs);
-    const vFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(vFs, videoFS); gl.compileShader(vFs);
-    videoProgram = gl.createProgram(); gl.attachShader(videoProgram, vVs); gl.attachShader(videoProgram, vFs); gl.linkProgram(videoProgram);
-    scaleUniformLocation = gl.getUniformLocation(videoProgram, "uScale");
+function animate() {
+    requestAnimationFrame(animate);
 
-    // Object Shaders Compile
-    const oVs = gl.createShader(gl.VERTEX_SHADER); gl.shaderSource(oVs, objectVS); gl.compileShader(oVs);
-    const oFs = gl.createShader(gl.FRAGMENT_SHADER); gl.shaderSource(oFs, objectFS); gl.compileShader(oFs);
-    objectProgram = gl.createProgram(); gl.attachShader(objectProgram, oVs); gl.attachShader(objectProgram, oFs); gl.linkProgram(objectProgram);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    // Build Backdrop Mesh (Quad Coordinates)
-    const quadVertices = new Float32Array([-1, -1, 1, -1, -1, 1, -1, 1, 1, -1, 1, 1]);
-    quadVAO = gl.createVertexArray(); gl.bindVertexArray(quadVAO);
-    let qVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, qVbo); gl.bufferData(gl.ARRAY_BUFFER, quadVertices, gl.STATIC_DRAW);
-    let posLoc = gl.getAttribLocation(videoProgram, "position"); gl.enableVertexAttribArray(posLoc); gl.vertexAttribPointer(posLoc, 2, gl.FLOAT, false, 0, 0);
-
-    // Build 3D Unit Mesh Box (Solid Triangles without Element Buffers for speed)
-    const cubeVertices = new Float32Array([
-        -0.1,-0.1,-0.1,  0.1,-0.1,-0.1,  0.1, 0.1,-0.1, -0.1,-0.1,-0.1,  0.1, 0.1,-0.1, -0.1, 0.1,-0.1,
-        -0.1,-0.1, 0.1,  0.1,-0.1, 0.1,  0.1, 0.1, 0.1, -0.1,-0.1, 0.1,  0.1, 0.1, 0.1, -0.1, 0.1, 0.1,
-        -0.1, 0.1, 0.1, -0.1, 0.1,-0.1, -0.1,-0.1,-0.1, -0.1, 0.1, 0.1, -0.1,-0.1,-0.1, -0.1,-0.1, 0.1,
-         0.1, 0.1, 0.1,  0.1, 0.1,-0.1,  0.1,-0.1,-0.1,  0.1, 0.1, 0.1,  0.1,-0.1,-0.1,  0.1,-0.1, 0.1,
-        -0.1,-0.1,-0.1,  0.1,-0.1,-0.1,  0.1,-0.1, 0.1, -0.1,-0.1,-0.1,  0.1,-0.1, 0.1, -0.1,-0.1, 0.1,
-        -0.1, 0.1,-0.1,  0.1, 0.1,-0.1,  0.1, 0.1, 0.1, -0.1, 0.1,-0.1,  0.1, 0.1, 0.1, -0.1, 0.1, 0.1
-    ]);
-
-    cubeVAO = gl.createVertexArray(); gl.bindVertexArray(cubeVAO);
-    let cVbo = gl.createBuffer(); gl.bindBuffer(gl.ARRAY_BUFFER, cVbo); gl.bufferData(gl.ARRAY_BUFFER, cubeVertices, gl.STATIC_DRAW);
-    let oPosLoc = gl.getAttribLocation(objectProgram, "position"); gl.enableVertexAttribArray(oPosLoc); gl.vertexAttribPointer(oPosLoc, 3, gl.FLOAT, false, 0, 0);
-
-    videoTexture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, videoTexture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR); gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
-
-    launchXRSession();
+    for (const obj of objects) {
+        ctx.fillStyle = obj.color;
+        ctx.fillRect(
+            obj.x,
+            obj.y,
+            obj.size,
+            obj.size
+        );
+    }
 }
 
-// --- STEP 3: INITIALIZE THE WEBXR STEREO CONTAINER VIEWPORT ---
-function launchXRSession() {
-    if (!navigator.xr) {
-        showStatus("WebXR feature missing. Open inside Android Chrome app.", 10000);
-        xrButton.disabled = false;
-        return;
-    }
-
-    navigator.xr.requestSession('immersive-vr', { optionalFeatures: ['local-floor'] }).then(session => {
-        xrSession = session;
-        xrButton.disabled = false;
-        xrButton.textContent = "Exit AR";
-        document.getElementById('ui-container').style.display = "none"; 
-        
-        const xrWebGLLayer = new XRWebGLLayer(xrSession, gl);
-        xrSession.updateRenderState({ baseLayer: xrWebGLLayer });
-        
-        xrSession.requestReferenceSpace('local').then(refSpace => {
-            xrRefSpace = refSpace;
-            xrSession.requestAnimationFrame(onXRFrame);
-        });
-    }).catch(err => {
-        xrButton.disabled = false;
-        showStatus("WebXR Blocked. Check your browser VR tracking permissions.", 10000);
-        console.error(err);
+canvas.addEventListener("click", e => {
+    objects.push({
+        x: e.clientX - 25,
+        y: e.clientY - 25,
+        size: 50,
+        color: "lime"
     });
-}
-
-// --- INPUT CONTROL HANDLING (PS4 PAD OVER WIRELESS BLUETOOTH) ---
-window.addEventListener("gamepadconnected", (e) => {
-    ps4ControllerIndex = e.gamepad.index;
-    showStatus("PS4 Gamepad detected and mapped!", 3000);
 });
+</script>
 
-function pollPS4Controller() {
-    if (ps4ControllerIndex === null) return;
-    const gamepads = navigator.getGamepads();
-    const gp = gamepads[ps4ControllerIndex];
-    if (!gp) return;
-    
-    // Check if index 0 (Cross / X Button) is held down
-    if (gp.buttons && gp.buttons[0] && gp.buttons[0].pressed && !aiDebounce) { 
-        aiDebounce = true;
-        generate3DContentAI();
-        setTimeout(() => { aiDebounce = false; }, 5000); 
-    }
-}
-
-// --- GENERATIVE AI GEMINI TRANSACTIONS ---
-async function generate3DContentAI() {
-    const apiKey = keyInput.value.trim();
-    if (!apiKey) { showStatus("ERROR: Input your API key before placing shapes!", 4000); return; }
-    showStatus("AI analyzing room data...", 15000);
-
-    const captureCanvas = document.createElement('canvas');
-    captureCanvas.width = 640; captureCanvas.height = 480;
+</body>
+</html>
