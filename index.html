@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Horizontal Stereoscopic AI-AR Engine</title>
+    <title>Voice-Controlled VR Box AR Engine</title>
     <style>
         body {
             margin: 0;
@@ -25,57 +25,61 @@
             background: rgba(255, 255, 255, 0.2);
             z-index: 10;
         }
-        #info-overlay {
+        #hud-overlay {
             position: absolute;
             top: 20px;
             left: 50%;
             transform: translateX(-50%);
-            color: white;
-            background: rgba(0,0,0,0.6);
-            padding: 10px 20px;
-            border-radius: 20px;
-            font-size: 14px;
+            color: #00ffcc;
+            background: rgba(0,0,0,0.7);
+            padding: 12px 24px;
+            border-radius: 30px;
+            font-size: 13px;
+            font-weight: bold;
             pointer-events: none;
             z-index: 10;
             text-align: center;
+            border: 1px solid #00ffcc;
+            box-shadow: 0 0 10px rgba(0,255,204,0.3);
         }
     </style>
 </head>
 <body>
 
-    <div id="info-overlay">Stereoscopic AI-AR Engine (Corrected Horizontal Camera Aspect)</div>
+    <div id="hud-overlay">🎤 Mic Active. Say: "Spawn Cube" | "Change Color" | "Clear Scene"</div>
     <div id="divider"></div>
     <div id="canvas-container"></div>
 
     <script type="module">
         import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
 
-        class StereoAIEngine {
+        class VoiceStereoAREngine {
             constructor() {
                 this.container = document.getElementById('canvas-container');
 
-                // 1. Setup Stereoscopic Perspective Cameras for 3D content
-                this.separation = 0.064; 
+                // 1. Dual Camera System for Stereoscopic VR Box alignment
+                this.ipd = 0.064; // Interpupillary distance setup
                 this.cameraL = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
                 this.cameraR = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
                 
                 this.scene = new THREE.Scene();
                 
-                // 2. Setup Background Scene & Orthographic Camera for a flat, un-distorted camera feed
+                // 2. Un-distorted panoramic horizontal camera plane
                 this.bgScene = new THREE.Scene();
                 this.bgCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 
-                // 3. Setup WebGL Renderer
                 this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
                 this.renderer.setPixelRatio(window.devicePixelRatio);
                 this.renderer.setSize(window.innerWidth, window.innerHeight);
                 this.renderer.autoClear = false;
                 this.container.appendChild(this.renderer.domElement);
 
-                this.virtualObjects = {};
+                this.spawnedObjects = [];
+                this.currentColor = 0x00ffcc;
 
                 this.initCameraStream();
                 this.initSceneLighting();
+                this.initVoiceRecognition();
                 this.animate();
 
                 window.addEventListener('resize', () => this.onWindowResize());
@@ -94,23 +98,18 @@
 
                     this.video.addEventListener('loadedmetadata', () => {
                         this.setupBackgroundPlane(new THREE.VideoTexture(this.video));
-                        this.runAIPipeline();
                     });
                 } catch (e) {
-                    console.warn("Camera blocked. Falling back to simulated background.");
+                    console.warn("Camera blocked. Generating fallback simulation panel.");
                     this.setupBackgroundPlane(this.createFallbackTexture());
-                    this.runAIPipeline();
                 }
             }
 
-            // Maps the video source onto a flat 2D plane spanning horizontally across the viewport
             setupBackgroundPlane(texture) {
                 texture.minFilter = THREE.LinearFilter;
-                
                 const geometry = new THREE.PlaneGeometry(2, 2);
                 const material = new THREE.MeshBasicMaterial({ map: texture, depthTest: false, depthWrite: false });
                 this.bgMesh = new THREE.Mesh(geometry, material);
-                
                 this.bgScene.add(this.bgMesh);
                 this.updateCameraAspect();
             }
@@ -119,18 +118,15 @@
                 const canvas = document.createElement('canvas');
                 canvas.width = 512; canvas.height = 512;
                 const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#111318'; ctx.fillRect(0, 0, 512, 512);
-                ctx.strokeStyle = '#222630';
+                ctx.fillStyle = '#15171e'; ctx.fillRect(0, 0, 512, 512);
+                ctx.strokeStyle = '#252936';
                 for(let i=0; i<512; i+=32) { ctx.strokeRect(i, 0, 32, 512); ctx.strokeRect(0, i, 512, 32); }
                 return new THREE.CanvasTexture(canvas);
             }
 
-            // Adjusts the camera projection coordinates so the horizontal video does not stretch weirdly
             updateCameraAspect() {
-                if (!this.video || !this.bgMesh) return;
-
-                const videoAspect = (this.video.videoWidth || 1280) / (this.video.videoHeight || 720);
-                // Aspect ratio of a single eye viewport (half of full screen width)
+                if (!this.bgMesh) return;
+                const videoAspect = this.video ? (this.video.videoWidth / this.video.videoHeight) : (1280 / 720);
                 const viewAspect = (window.innerWidth / 2) / window.innerHeight;
 
                 if (viewAspect > videoAspect) {
@@ -141,89 +137,14 @@
             }
 
             initSceneLighting() {
-                const light = new THREE.DirectionalLight(0xffffff, 1.5);
-                light.position.set(2, 5, 5);
+                const light = new THREE.DirectionalLight(0xffffff, 2.0);
+                light.position.set(2, 4, 5);
                 this.scene.add(light);
-                this.scene.add(new THREE.AmbientLight(0x505050));
+                this.scene.add(new THREE.AmbientLight(0x666666));
             }
 
-            async runAIPipeline() {
-                const aiPredictions = await this.mock3DAIInference();
-
-                aiPredictions.forEach(prediction => {
-                    const { id, position, rotation } = prediction;
-
-                    if (!this.virtualObjects[id]) {
-                        const geometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-                        const material = new THREE.MeshPhongMaterial({ color: 0x00ffcc, shininess: 100 });
-                        const mesh = new THREE.Mesh(geometry, material);
-                        
-                        const wireframe = new THREE.LineSegments(new THREE.EdgesGeometry(geometry), new THREE.LineBasicMaterial({ color: 0xffffff }));
-                        mesh.add(wireframe);
-
-                        this.scene.add(mesh);
-                        this.virtualObjects[id] = mesh;
-                    }
-
-                    this.virtualObjects[id].position.set(position.x, position.y, position.z);
-                    this.virtualObjects[id].rotation.set(rotation.x, rotation.y, rotation.z);
-                });
-
-                requestAnimationFrame(() => this.runAIPipeline());
-            }
-
-            async mock3DAIInference() {
-                const time = Date.now() * 0.0015;
-                return [{
-                    id: "ai_target_01",
-                    position: { x: Math.sin(time) * 0.7, y: Math.cos(time * 0.5) * 0.2, z: -2.2 }, 
-                    rotation: { x: time * 0.5, y: time, z: 0 }
-                }];
-            }
-
-            onWindowResize() {
-                const width = window.innerWidth;
-                const height = window.innerHeight;
-                
-                this.renderer.setSize(width, height);
-                
-                this.cameraL.aspect = (width / 2) / height;
-                this.cameraL.updateProjectionMatrix();
-                
-                this.cameraR.aspect = (width / 2) / height;
-                this.cameraR.updateProjectionMatrix();
-
-                this.updateCameraAspect();
-            }
-
-            animate() {
-                requestAnimationFrame(() => this.animate());
-
-                const width = window.innerWidth;
-                const height = window.innerHeight;
-
-                this.cameraL.position.set(-this.separation / 2, 0, 0);
-                this.cameraR.position.set(this.separation / 2, 0, 0);
-
-                this.renderer.clear();
-
-                // Left Eye Viewport Rendering
-                this.renderer.setViewport(0, 0, width / 2, height);
-                this.renderer.setScissor(0, 0, width / 2, height);
-                this.renderer.setScissorTest(true);
-                this.renderer.render(this.bgScene, this.bgCamera); // Draw flat background first
-                this.renderer.render(this.scene, this.cameraL);   // Overlay 3D components
-
-                // Right Eye Viewport Rendering
-                this.renderer.setViewport(width / 2, 0, width / 2, height);
-                this.renderer.setScissor(width / 2, 0, width / 2, height);
-                this.renderer.setScissorTest(true);
-                this.renderer.render(this.bgScene, this.bgCamera); // Draw flat background first
-                this.renderer.render(this.scene, this.cameraR);   // Overlay 3D components
-            }
-        }
-
-        window.addEventListener('DOMContentLoaded', () => new StereoAIEngine());
-    </script>
-</body>
-</html>
+            /**
+             * 3. Speech Recognition Integration
+             */
+            initVoiceRecognition() {
+                const SpeechRecognition = window.SpeechRecognition || window.webkit
