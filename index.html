@@ -1,75 +1,225 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Stereo Camera</title>
-
-<style>
-html,body{
-    margin:0;
-    width:100%;
-    height:100%;
-    overflow:hidden;
-    background:black;
-}
-
-#container{
-    display:flex;
-    width:100vw;
-    height:100vh;
-}
-
-.eye{
-    width:50%;
-    height:100%;
-    object-fit:cover;
-}
-
-#start{
-    position:absolute;
-    bottom:20px;
-    left:50%;
-    transform:translateX(-50%);
-    z-index:100;
-    padding:12px 20px;
-}
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Stereoscopic AI-AR Engine</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-color: #000;
+            font-family: sans-serif;
+        }
+        #canvas-container {
+            width: 100vw;
+            height: 100vh;
+        }
+        /* Center divider line to help align stereoscopic viewers */
+        #divider {
+            position: absolute;
+            left: 50%;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: rgba(255, 255, 255, 0.2);
+            z-index: 10;
+        }
+        #info-overlay {
+            position: absolute;
+            top: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            background: rgba(0,0,0,0.6);
+            padding: 10px 20px;
+            border-radius: 20px;
+            font-size: 14px;
+            pointer-events: none;
+            z-index: 10;
+            text-align: center;
+        }
+    </style>
 </head>
 <body>
 
-<div id="container">
-    <video id="leftEye" class="eye" autoplay playsinline muted></video>
-    <video id="rightEye" class="eye" autoplay playsinline muted></video>
-</div>
+    <div id="info-overlay">Stereoscopic AI-AR Engine Active (Simulating 3D Object Detection)</div>
+    <div id="divider"></div>
+    <div id="canvas-container"></div>
 
-<button id="start">Start Stereo Camera</button>
+    <script type="module">
+        import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
 
-<script>
+        class StereoAIEngine {
+            constructor() {
+                this.container = document.getElementById('canvas-container');
 
-const leftEye = document.getElementById("leftEye");
-const rightEye = document.getElementById("rightEye");
+                // 1. Setup Stereoscopic Cameras (Left & Right eye splitting)
+                this.separation = 0.064; // Standard IPD (64mm) converted to metric units
+                this.cameraL = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
+                this.cameraR = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
+                
+                this.scene = new THREE.Scene();
+                
+                // 2. Setup WebGL Renderer
+                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+                this.renderer.setPixelRatio(window.devicePixelRatio);
+                this.renderer.setSize(window.innerWidth, window.innerHeight);
+                this.renderer.autoClear = false;
+                this.container.appendChild(this.renderer.domElement);
 
-document.getElementById("start").onclick = async () => {
+                // 3. Anchor Registry for Tracking AI Targets
+                this.virtualObjects = {};
 
-    try {
+                this.initCameraStream();
+                this.initSceneLighting();
+                this.animate();
 
-        const stream =
-            await navigator.mediaDevices.getUserMedia({
-                video:{
-                    facingMode:"environment"
+                window.addEventListener('resize', () => this.onWindowResize());
+            }
+
+            async initCameraStream() {
+                try {
+                    this.video = document.createElement('video');
+                    this.video.autoplay = true;
+                    this.video.playsInline = true;
+                    
+                    // Request user's environment (back) camera
+                    this.video.srcObject = await navigator.mediaDevices.getUserMedia({
+                        video: { facingMode: 'environment', width: 1280, height: 720 }
+                    });
+                    this.video.play();
+
+                    // Map camera feed directly onto the scene background canvas texture
+                    const videoTexture = new THREE.VideoTexture(this.video);
+                    this.scene.background = videoTexture;
+                    
+                    // Fire up the continuous AI Tracking pipeline once data is parsed
+                    this.video.addEventListener('loadedmetadata', () => this.runAIPipeline());
+                } catch (e) {
+                    console.warn("Camera access blocked or unavailable. Falling back to digital background simulation.");
+                    this.setupFallbackBackground();
                 }
-            });
+            }
 
-        leftEye.srcObject = stream;
-        rightEye.srcObject = stream;
+            setupFallbackBackground() {
+                // Creates a procedural space pattern matrix if a camera hardware block occurs
+                const canvas = document.createElement('canvas');
+                canvas.width = 512;
+                canvas.height = 512;
+                const ctx = canvas.getContext('2d');
+                ctx.fillStyle = '#111318';
+                ctx.fillRect(0, 0, 512, 512);
+                ctx.strokeStyle = '#222630';
+                for(let i=0; i<512; i+=32) {
+                    ctx.strokeRect(i, 0, 32, 512);
+                    ctx.strokeRect(0, i, 512, 32);
+                }
+                this.scene.background = new THREE.CanvasTexture(canvas);
+                this.runAIPipeline();
+            }
 
-    } catch(err) {
-        alert(err.message);
-    }
-};
+            initSceneLighting() {
+                const light = new THREE.DirectionalLight(0xffffff, 1.5);
+                light.position.set(2, 5, 5);
+                this.scene.add(light);
+                this.scene.add(new THREE.AmbientLight(0x505050));
+            }
 
-</script>
+            /**
+             * 4. AI Vision Core
+             * Real-time 6DoF inference simulation tracking 3D positional matrix coordinates
+             */
+            async runAIPipeline() {
+                const aiPredictions = await this.mock3DAIInference(this.video);
 
+                aiPredictions.forEach(prediction => {
+                    const { id, position, rotation } = prediction;
+
+                    // Dynamically generate a 3D geometry matrix anchor node when AI detects a target identity
+                    if (!this.virtualObjects[id]) {
+                        const geometry = new THREE.BoxGeometry(0.6, 0.6, 0.6);
+                        const material = new THREE.MeshPhongMaterial({ 
+                            color: 0x00ffcc, 
+                            wireframe: false,
+                            shininess: 100
+                        });
+                        const mesh = new THREE.Mesh(geometry, material);
+                        
+                        // Add an inner glowing wireframe for high-tech aesthetic
+                        const wireframeGeom = new THREE.EdgesGeometry(geometry);
+                        const wireframeMat = new THREE.LineBasicMaterial({ color: 0xffffff });
+                        const wireframe = new THREE.LineSegments(wireframeGeom, wireframeMat);
+                        mesh.add(wireframe);
+
+                        this.scene.add(mesh);
+                        this.virtualObjects[id] = mesh;
+                    }
+
+                    // Align virtual item coordinates perfectly with the AI-detected physical object tracking vectors
+                    this.virtualObjects[id].position.set(position.x, position.y, position.z);
+                    this.virtualObjects[id].rotation.set(rotation.x, rotation.y, rotation.z);
+                });
+
+                requestAnimationFrame(() => this.runAIPipeline());
+            }
+
+            // Emulating spatial 3D translation vectors returned from Monocular Neural Networks
+            async mock3DAIInference(videoElement) {
+                const time = Date.now() * 0.0015;
+                return [{
+                    id: "ai_target_01",
+                    position: { 
+                        x: Math.sin(time) * 0.8, 
+                        y: Math.cos(time * 0.5) * 0.3, 
+                        z: -2.5 // Set 2.5 meters in front of the stereo lens arrays
+                    }, 
+                    rotation: { x: time * 0.5, y: time, z: 0 }
+                }];
+            }
+
+            onWindowResize() {
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+                this.renderer.setSize(width, height);
+                this.cameraL.aspect = (width / 2) / height;
+                this.cameraL.updateProjectionMatrix();
+                this.cameraR.aspect = (width / 2) / height;
+                this.cameraR.updateProjectionMatrix();
+            }
+
+            /**
+             * 5. Dual-Viewport Stereoscopic Render Loop
+             */
+            animate() {
+                requestAnimationFrame(() => this.animate());
+
+                const width = window.innerWidth;
+                const height = window.innerHeight;
+
+                // Sync camera offsets symmetrically relative to center node
+                this.cameraL.position.set(-this.separation / 2, 0, 0);
+                this.cameraR.position.set(this.separation / 2, 0, 0);
+
+                this.renderer.clear();
+
+                // Left Eye Frame Rendering Buffer
+                this.renderer.setViewport(0, 0, width / 2, height);
+                this.renderer.setScissor(0, 0, width / 2, height);
+                this.renderer.setScissorTest(true);
+                this.renderer.render(this.scene, this.cameraL);
+
+                // Right Eye Frame Rendering Buffer
+                this.renderer.setViewport(width / 2, 0, width / 2, height);
+                this.renderer.setScissor(width / 2, 0, width / 2, height);
+                this.renderer.setScissorTest(true);
+                this.renderer.render(this.scene, this.cameraR);
+            }
+        }
+
+        // Initialize the tracking environment on page load
+        window.addEventListener('DOMContentLoaded', () => new StereoAIEngine());
+    </script>
 </body>
 </html>
