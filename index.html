@@ -2,31 +2,67 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Interactive Quaternion Biology Lab</title>
+    <title>Quaternion Biology Lab</title>
     <style>
         body { margin: 0; overflow: hidden; background-color: #030307; font-family: monospace; }
-        #error-box {
-            position: absolute; top: 20px; left: 20px; right: 20px;
-            color: #ff4444; background: rgba(0,0,0,0.85); padding: 12px;
-            border-radius: 6px; font-size: 13px; display: none; z-index: 1000;
-            border: 1px solid #ff4444; pointer-events: none;
+        #ui-panel {
+            position: absolute; top: 20px; right: 20px; width: 260px;
+            background: rgba(10, 10, 20, 0.85); border: 1px solid #38bdf8;
+            border-radius: 8px; padding: 15px; color: #38bdf8; z-index: 100;
+            box-shadow: 0 0 20px rgba(56, 189, 248, 0.2);
+            backdrop-filter: blur(5px);
         }
-        .dg.ac { z-index: 100 !important; }
+        .control-group { margin-bottom: 12px; }
+        label { display: block; font-size: 11px; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 1px; }
+        input[type="range"] { width: 100%; accent-color: #38bdf8; cursor: pointer; }
+        .val-display { float: right; color: #94a3b8; }
+        #error-box {
+            position: absolute; top: 20px; left: 20px; color: #ff4444; background: rgba(0,0,0,0.9);
+            padding: 10px; border-radius: 5px; font-size: 12px; display: none; z-index: 1000;
+            border: 1px solid #ff4444;
+        }
     </style>
 </head>
 <body>
     <div id="error-box"></div>
 
-    <!-- Reliable CDN Versions -->
+    <div id="ui-panel">
+        <h3 style="margin-top:0; font-size:13px; border-bottom:1px solid #38bdf8; padding-bottom:6px; letter-spacing: 2px;">LATTICE GENETICS</h3>
+        
+        <div class="control-group">
+            <label>Fundamental Angle (&theta;) <span class="val-display" id="val-theta">0.79</span></label>
+            <input type="range" id="theta" min="0" max="3.14159" step="0.01" value="0.785">
+        </div>
+
+        <div class="control-group">
+            <label>Atom Count (N) <span class="val-display" id="val-atoms">150</span></label>
+            <input type="range" id="atoms" min="50" max="350" step="1" value="150">
+        </div>
+
+        <div class="control-group">
+            <label>Pulse Frequency <span class="val-display" id="val-freq">2.0</span></label>
+            <input type="range" id="freq" min="0.1" max="10" step="0.1" value="2.0">
+        </div>
+
+        <div class="control-group">
+            <label>Pulse Amplitude <span class="val-display" id="val-amp">0.15</span></label>
+            <input type="range" id="amp" min="0" max="0.5" step="0.01" value="0.15">
+        </div>
+
+        <div class="control-group">
+            <label>Global Spin <span class="val-display" id="val-spin">0.2</span></label>
+            <input type="range" id="spin" min="0" max="1" step="0.05" value="0.2">
+        </div>
+    </div>
+
+    <!-- Three.js CDN -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
 
     <script>
-        // Error catch display
         window.onerror = function(msg, url, line) {
             const eb = document.getElementById('error-box');
             eb.style.display = 'block';
-            eb.innerText = "Script Error: " + msg + " (Line: " + line + ")";
+            eb.innerText = "Error: " + msg + " (Line: " + line + ")";
             return true;
         };
 
@@ -40,58 +76,45 @@
             renderer.toneMapping = THREE.ReinhardToneMapping;
             document.body.appendChild(renderer.domElement);
 
-            // 2. SIMULATION SETTINGS (The "Genetics")
+            // 2. SETTINGS STATE
             const settings = {
-                theta: Math.PI * 0.25,
+                theta: 0.785,
                 baseRadius: 3.0,
                 totalAtoms: 150,
                 pulseFreq: 2.0,
                 pulseAmp: 0.15,
-                noiseStrength: 0.02,
-                atomColor: "#38bdf8",
-                emissiveIntensity: 0.4,
-                wireframe: false,
                 spinSpeed: 0.2
             };
 
-            // 3. GUI SETUP
-            const gui = new dat.GUI();
-            
-            const geomFolder = gui.addFolder('Quaternion Lattice Genetics');
-            geomFolder.add(settings, 'theta', 0, Math.PI).name('Fundamental Angle (θ)');
-            geomFolder.add(settings, 'baseRadius', 1, 6).name('Base Radius');
-            geomFolder.add(settings, 'totalAtoms', 50, 500).step(1).name('Atom Count (N)').onChange(regenerateLattice);
-            geomFolder.open();
+            // 3. UI BINDINGS
+            function bindSlider(id, settingKey, displayId, formatter = v => v) {
+                const slider = document.getElementById(id);
+                const display = document.getElementById(displayId);
+                slider.addEventListener('input', (e) => {
+                    settings[settingKey] = parseFloat(e.target.value);
+                    display.innerText = formatter(settings[settingKey]);
+                    if (settingKey === 'totalAtoms') {
+                        regenerateLattice();
+                    }
+                });
+            }
 
-            const rhythmFolder = gui.addFolder('Metabolic Rhythm');
-            rhythmFolder.add(settings, 'pulseFreq', 0.1, 10).name('Pulse Frequency');
-            rhythmFolder.add(settings, 'pulseAmp', 0, 0.5).name('Pulse Amplitude');
-            rhythmFolder.add(settings, 'noiseStrength', 0, 0.1).name('Organic Jitter');
-            rhythmFolder.open();
-
-            const visFolder = gui.addFolder('Visualization');
-            visFolder.addColor(settings, 'atomColor').name('Atom Color').onChange(updateMaterial);
-            visFolder.add(settings, 'emissiveIntensity', 0, 2).name('Glow Intensity').onChange(updateMaterial);
-            visFolder.add(settings, 'wireframe').name('Wireframe Mode').onChange(updateMaterial);
-            visFolder.add(settings, 'spinSpeed', 0, 1).name('Global Spin');
+            bindSlider('theta', 'theta', 'val-theta', v => v.toFixed(2));
+            bindSlider('atoms', 'totalAtoms', 'val-atoms', v => v);
+            bindSlider('freq', 'pulseFreq', 'val-freq', v => v.toFixed(1));
+            bindSlider('amp', 'pulseAmp', 'val-amp', v => v.toFixed(2));
+            bindSlider('spin', 'spinSpeed', 'val-spin', v => v.toFixed(2));
 
             // 4. MESHES & MATERIALS
             let atomMesh;
             const atomGeometry = new THREE.SphereGeometry(0.1, 16, 16);
             const atomMaterial = new THREE.MeshStandardMaterial({ 
-                color: settings.atomColor,
-                emissive: settings.atomColor,
-                emissiveIntensity: settings.emissiveIntensity,
+                color: 0x38bdf8,
+                emissive: 0x0284c7,
+                emissiveIntensity: 0.4,
                 roughness: 0.1,
                 metalness: 0.8
             });
-
-            function updateMaterial() {
-                atomMaterial.color.set(settings.atomColor);
-                atomMaterial.emissive.set(settings.atomColor);
-                atomMaterial.emissiveIntensity = settings.emissiveIntensity;
-                atomMaterial.wireframe = settings.wireframe;
-            }
 
             function getFibonacciSpherePoint(i, n) {
                 const phi = Math.PI * (3 - Math.sqrt(5));
@@ -166,4 +189,38 @@
                     atomMesh.rotation.x = Math.sin(t * 0.2) * 0.2;
 
                     atomMetaData.forEach((atom, idx) => {
-                        const pulse = Math.sin(t * settings.pulseFreq
+                        const pulse = Math.sin(t * settings.pulseFreq + atom.phase) * settings.pulseAmp;
+                        const jitter = atom.noiseVec.clone().multiplyScalar(Math.random() * 0.02);
+                        
+                        const currentPos = atom.basePos.clone().multiplyScalar(1 + pulse).add(jitter);
+                        dummy.position.copy(currentPos);
+                        dummy.quaternion.copy(atom.quaternion);
+                        
+                        const scale = 1 + pulse * 0.5;
+                        dummy.scale.set(scale, scale, scale);
+
+                        dummy.updateMatrix();
+                        atomMesh.setMatrixAt(idx, dummy.matrix);
+                    });
+
+                    atomMesh.instanceMatrix.needsUpdate = true;
+                }
+
+                renderer.render(scene, camera);
+            }
+            animate(0);
+
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+
+        } catch (err) {
+            const eb = document.getElementById('error-box');
+            eb.style.display = 'block';
+            eb.innerText = "Setup Exception: " + err.message;
+        }
+    </script>
+</body>
+</html>
