@@ -4,206 +4,166 @@
     <meta charset="UTF-8">
     <title>Interactive Quaternion Biology Lab</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #030307; }
-        canvas { display: block; }
-        /* Minimal styling for the GUI */
+        body { margin: 0; overflow: hidden; background-color: #030307; font-family: monospace; }
+        #error-box {
+            position: absolute; top: 20px; left: 20px; right: 20px;
+            color: #ff4444; background: rgba(0,0,0,0.85); padding: 12px;
+            border-radius: 6px; font-size: 13px; display: none; z-index: 1000;
+            border: 1px solid #ff4444; pointer-events: none;
+        }
         .dg.ac { z-index: 100 !important; }
     </style>
 </head>
 <body>
+    <div id="error-box"></div>
 
-    <!-- Import Three.js and dat.GUI -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r161/three.min.js"></script>
+    <!-- Reliable CDN Versions -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/dat-gui/0.7.9/dat.gui.min.js"></script>
 
     <script>
-        // 1. SCENE SETUP
-        const scene = new THREE.Scene();
-        scene.fog = new THREE.FogExp2(0x030307, 0.05);
-        const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
-        const renderer = new THREE.WebGLRenderer({ antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.toneMapping = THREE.ReinhardToneMapping; // Adds bloom effect
-        document.body.appendChild(renderer.domElement);
-
-        // 2. SIMULATION SETTINGS OBJECT (The "Genetics")
-        // This is the object the GUI will modify in real-time.
-        const settings = {
-            // Lattice Geometry
-            theta: Math.PI * 0.25, // Fundamental angle
-            baseRadius: 3.0,
-            totalAtoms: 150,
-            
-            // Metabolism (Breathing Pulse)
-            pulseFreq: 2.0,
-            pulseAmp: 0.15,
-            noiseStrength: 0.02, // Adds organic jitter
-
-            // Visualization
-            atomColor: 0x38bdf8, // Cyan
-            emissiveIntensity: 0.4,
-            wireframe: false,
-            spinSpeed: 0.2
+        // Error catch display
+        window.onerror = function(msg, url, line) {
+            const eb = document.getElementById('error-box');
+            eb.style.display = 'block';
+            eb.innerText = "Script Error: " + msg + " (Line: " + line + ")";
+            return true;
         };
 
-        // 3. GUI SETUP
-        const gui = new dat.GUI();
-        
-        // Folder 1: Lattice Genetics (Controls Geometry)
-        const geomFolder = gui.addFolder('Quaternion Lattice Genetics');
-        geomFolder.add(settings, 'theta', 0, Math.PI).name('Fundamental Angle (θ)');
-        geomFolder.add(settings, 'baseRadius', 1, 6).name('Base Radius');
-        geomFolder.add(settings, 'totalAtoms', 50, 500).step(1).name('Atom Count (N)').onChange(regenerateLattice);
-        geomFolder.open();
+        try {
+            // 1. SCENE SETUP
+            const scene = new THREE.Scene();
+            scene.fog = new THREE.FogExp2(0x030307, 0.05);
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.toneMapping = THREE.ReinhardToneMapping;
+            document.body.appendChild(renderer.domElement);
 
-        // Folder 2: Metabolic Rhythm (Controls Animation)
-        const rhythmFolder = gui.addFolder('Metabolic Rhythm');
-        rhythmFolder.add(settings, 'pulseFreq', 0.1, 10).name('Pulse Frequency');
-        rhythmFolder.add(settings, 'pulseAmp', 0, 0.5).name('Pulse Amplitude');
-        rhythmFolder.add(settings, 'noiseStrength', 0, 0.1).name('Organic Jitter');
-        rhythmFolder.open();
+            // 2. SIMULATION SETTINGS (The "Genetics")
+            const settings = {
+                theta: Math.PI * 0.25,
+                baseRadius: 3.0,
+                totalAtoms: 150,
+                pulseFreq: 2.0,
+                pulseAmp: 0.15,
+                noiseStrength: 0.02,
+                atomColor: "#38bdf8",
+                emissiveIntensity: 0.4,
+                wireframe: false,
+                spinSpeed: 0.2
+            };
 
-        // Folder 3: Visualization (Controls Aesthetics)
-        const visFolder = gui.addFolder('Visualization');
-        visFolder.addColor(settings, 'atomColor').name('Atom Color').onChange(updateMaterial);
-        visFolder.add(settings, 'emissiveIntensity', 0, 2).name('Glow Intensity').onChange(updateMaterial);
-        visFolder.add(settings, 'wireframe').name('Wireframe Mode').onChange(updateMaterial);
-        visFolder.add(settings, 'spinSpeed', 0, 1).name('Global Spin');
-
-        // 4. GEOMETRY & MESHES
-        let atomMesh;
-        const atomGeometry = new THREE.SphereGeometry(0.1, 16, 16);
-        const atomMaterial = new THREE.MeshStandardMaterial({ 
-            color: settings.atomColor,
-            emissive: settings.atomColor,
-            emissiveIntensity: settings.emissiveIntensity,
-            roughness: 0.1,
-            metalness: 0.8
-        });
-
-        function updateMaterial() {
-            atomMaterial.color.set(settings.atomColor);
-            atomMaterial.emissive.set(settings.atomColor);
-            atomMaterial.emissiveIntensity = settings.emissiveIntensity;
-            atomMaterial.wireframe = settings.wireframe;
-        }
-
-        // Helper: Fibonacci sphere distribution for even points
-        function getFibonacciSpherePoint(i, n) {
-            const phi = Math.PI * (3 - Math.sqrt(5)); // Golden angle
-            const y = 1 - (i / (n - 1)) * 2; // y goes from 1 to -1
-            const radiusAtY = Math.sqrt(1 - y * y); // radius at y
-            const theta = phi * i; // golden angle increment
-            return new THREE.Vector3(
-                Math.cos(theta) * radiusAtY,
-                y,
-                Math.sin(theta) * radiusAtY
-            );
-        }
-
-        // Data array to store per-atom metadata for animation
-        let atomMetaData = [];
-        const dummy = new THREE.Object3D();
-
-        function regenerateLattice() {
-            // Remove old mesh if it exists
-            if (atomMesh) scene.remove(atomMesh);
+            // 3. GUI SETUP
+            const gui = new dat.GUI();
             
-            atomMetaData = [];
-            atomMesh = new THREE.InstancedMesh(atomGeometry, atomMaterial, settings.totalAtoms);
-            scene.add(atomMesh);
+            const geomFolder = gui.addFolder('Quaternion Lattice Genetics');
+            geomFolder.add(settings, 'theta', 0, Math.PI).name('Fundamental Angle (θ)');
+            geomFolder.add(settings, 'baseRadius', 1, 6).name('Base Radius');
+            geomFolder.add(settings, 'totalAtoms', 50, 500).step(1).name('Atom Count (N)').onChange(regenerateLattice);
+            geomFolder.open();
 
-            for (let i = 0; i < settings.totalAtoms; i++) {
-                const v = getFibonacciSpherePoint(i, settings.totalAtoms);
+            const rhythmFolder = gui.addFolder('Metabolic Rhythm');
+            rhythmFolder.add(settings, 'pulseFreq', 0.1, 10).name('Pulse Frequency');
+            rhythmFolder.add(settings, 'pulseAmp', 0, 0.5).name('Pulse Amplitude');
+            rhythmFolder.add(settings, 'noiseStrength', 0, 0.1).name('Organic Jitter');
+            rhythmFolder.open();
 
-                // Apply polar quaternion orientation based on position vector
-                // q = cos(theta) + sin(theta) * v
-                const q = new THREE.Quaternion(
-                    v.x * Math.sin(settings.theta),
-                    v.y * Math.sin(settings.theta),
-                    v.z * Math.sin(settings.theta),
-                    Math.cos(settings.theta)
-                );
+            const visFolder = gui.addFolder('Visualization');
+            visFolder.addColor(settings, 'atomColor').name('Atom Color').onChange(updateMaterial);
+            visFolder.add(settings, 'emissiveIntensity', 0, 2).name('Glow Intensity').onChange(updateMaterial);
+            visFolder.add(settings, 'wireframe').name('Wireframe Mode').onChange(updateMaterial);
+            visFolder.add(settings, 'spinSpeed', 0, 1).name('Global Spin');
 
-                atomMetaData.push({
-                    basePos: v.clone().multiplyScalar(settings.baseRadius),
-                    quaternion: q,
-                    // Give each atom a slightly different phase for organic waves
-                    phase: Math.random() * Math.PI * 2,
-                    // Random vector for jitter
-                    noiseVec: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize()
-                });
+            // 4. MESHES & MATERIALS
+            let atomMesh;
+            const atomGeometry = new THREE.SphereGeometry(0.1, 16, 16);
+            const atomMaterial = new THREE.MeshStandardMaterial({ 
+                color: settings.atomColor,
+                emissive: settings.atomColor,
+                emissiveIntensity: settings.emissiveIntensity,
+                roughness: 0.1,
+                metalness: 0.8
+            });
 
-                // Initialize matrix
-                dummy.position.copy(atomMetaData[i].basePos);
-                dummy.quaternion.copy(q);
-                dummy.updateMatrix();
-                atomMesh.setMatrixAt(i, dummy.matrix);
+            function updateMaterial() {
+                atomMaterial.color.set(settings.atomColor);
+                atomMaterial.emissive.set(settings.atomColor);
+                atomMaterial.emissiveIntensity = settings.emissiveIntensity;
+                atomMaterial.wireframe = settings.wireframe;
             }
-            atomMesh.instanceMatrix.needsUpdate = true;
-        }
 
-        // Initial generation
-        regenerateLattice();
+            function getFibonacciSpherePoint(i, n) {
+                const phi = Math.PI * (3 - Math.sqrt(5));
+                const y = 1 - (i / (n - 1)) * 2;
+                const radiusAtY = Math.sqrt(1 - y * y);
+                const theta = phi * i;
+                return new THREE.Vector3(
+                    Math.cos(theta) * radiusAtY,
+                    y,
+                    Math.sin(theta) * radiusAtY
+                );
+            }
 
-        // 5. LIGHTING
-        scene.add(new THREE.AmbientLight(0xffffff, 0.5));
-        const pointLight = new THREE.PointLight(0x38bdf8, 20, 10);
-        pointLight.position.set(0, 2, 5);
-        scene.add(pointLight);
+            let atomMetaData = [];
+            const dummy = new THREE.Object3D();
 
-        const backLight = new THREE.DirectionalLight(0xf43f5e, 3);
-        backLight.position.set(-5, -5, -5);
-        scene.add(backLight);
+            function regenerateLattice() {
+                if (atomMesh) {
+                    scene.remove(atomMesh);
+                    atomMesh.geometry.dispose();
+                }
+                
+                atomMetaData = [];
+                atomMesh = new THREE.InstancedMesh(atomGeometry, atomMaterial, settings.totalAtoms);
+                scene.add(atomMesh);
 
-        camera.position.set(0, 0, 8);
+                for (let i = 0; i < settings.totalAtoms; i++) {
+                    const v = getFibonacciSpherePoint(i, settings.totalAtoms);
+                    const q = new THREE.Quaternion(
+                        v.x * Math.sin(settings.theta),
+                        v.y * Math.sin(settings.theta),
+                        v.z * Math.sin(settings.theta),
+                        Math.cos(settings.theta)
+                    );
 
-        // 6. LIVING ANIMATION LOOP
-        function animate(time) {
-            requestAnimationFrame(animate);
-            const t = time * 0.001; // Time in seconds
+                    atomMetaData.push({
+                        basePos: v.clone().multiplyScalar(settings.baseRadius),
+                        quaternion: q,
+                        phase: Math.random() * Math.PI * 2,
+                        noiseVec: new THREE.Vector3(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).normalize()
+                    });
 
-            if (atomMesh) {
-                // Apply global spin
-                atomMesh.rotation.y = t * settings.spinSpeed;
-                atomMesh.rotation.x = Math.sin(t * 0.2) * 0.2;
-
-                atomMetaData.forEach((atom, idx) => {
-                    // A. Calculate Metabolic Pulse (Breathing)
-                    const pulse = Math.sin(t * settings.pulseFreq + atom.phase) * settings.pulseAmp;
-                    
-                    // B. Add Organic Jitter (Noise)
-                    const jitter = atom.noiseVec.clone().multiplyScalar(Math.random() * settings.noiseStrength);
-
-                    // C. Update Position
-                    const currentPos = atom.basePos.clone().multiplyScalar(1 + pulse).add(jitter);
-                    dummy.position.copy(currentPos);
-
-                    // D. Keep Quaternion Orientation (The structural integrity)
-                    dummy.quaternion.copy(atom.quaternion);
-                    
-                    // E. Update Scale (Optional organic growth pulse)
-                    const scale = 1 + pulse * 0.5;
-                    dummy.scale.set(scale, scale, scale);
-
+                    dummy.position.copy(atomMetaData[i].basePos);
+                    dummy.quaternion.copy(q);
                     dummy.updateMatrix();
-                    atomMesh.setMatrixAt(idx, dummy.matrix);
-                });
-
+                    atomMesh.setMatrixAt(i, dummy.matrix);
+                }
                 atomMesh.instanceMatrix.needsUpdate = true;
             }
 
-            renderer.render(scene, camera);
-        }
-        animate(0);
+            regenerateLattice();
 
-        // Handle Resize
-        window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
-            camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
-        });
+            // 5. LIGHTING
+            scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+            const pointLight = new THREE.PointLight(0x38bdf8, 20, 10);
+            pointLight.position.set(0, 2, 5);
+            scene.add(pointLight);
 
-    </script>
-</body>
-</html>
+            const backLight = new THREE.DirectionalLight(0xf43f5e, 3);
+            backLight.position.set(-5, -5, -5);
+            scene.add(backLight);
+
+            camera.position.set(0, 0, 8);
+
+            // 6. ANIMATION LOOP
+            function animate(time) {
+                requestAnimationFrame(animate);
+                const t = time * 0.001;
+
+                if (atomMesh) {
+                    atomMesh.rotation.y = t * settings.spinSpeed;
+                    atomMesh.rotation.x = Math.sin(t * 0.2) * 0.2;
+
+                    atomMetaData.forEach((atom, idx) => {
+                        const pulse = Math.sin(t * settings.pulseFreq
