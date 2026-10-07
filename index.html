@@ -2,149 +2,182 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voice-Controlled VR Box AR Engine</title>
+    <title>C60 Buckyball - Mobile Safe</title>
     <style>
-        body {
-            margin: 0;
-            padding: 0;
-            overflow: hidden;
-            background-color: #000;
-            font-family: sans-serif;
+        body { margin: 0; overflow: hidden; background-color: #020208; font-family: sans-serif; }
+        #status {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            color: #38bdf8; font-size: 14px; background: rgba(0,0,0,0.7);
+            padding: 8px 16px; border-radius: 20px; border: 1px solid #0284c7;
+            pointer-events: none; z-index: 10;
         }
-        #canvas-container {
-            width: 100vw;
-            height: 100vh;
-        }
-        #divider {
-            position: absolute;
-            left: 50%;
-            top: 0;
-            bottom: 0;
-            width: 2px;
-            background: rgba(255, 255, 255, 0.2);
-            z-index: 10;
-        }
-        #hud-overlay {
-            position: absolute;
-            top: 20px;
-            left: 50%;
-            transform: translateX(-50%);
-            color: #00ffcc;
-            background: rgba(0,0,0,0.7);
-            padding: 12px 24px;
-            border-radius: 30px;
-            font-size: 13px;
-            font-weight: bold;
-            pointer-events: none;
-            z-index: 10;
-            text-align: center;
-            border: 1px solid #00ffcc;
-            box-shadow: 0 0 10px rgba(0,255,204,0.3);
+        #error-box {
+            position: absolute; top: 70px; left: 20px; right: 20px;
+            color: #f43f5e; font-size: 12px; background: rgba(0,0,0,0.8);
+            padding: 10px; border-radius: 5px; display: none; z-index: 20;
         }
     </style>
 </head>
 <body>
+    <div id="status">Loading Three.js & Molecule...</div>
+    <div id="error-box"></div>
 
-    <div id="hud-overlay">🎤 Mic Active. Say: "Spawn Cube" | "Change Color" | "Clear Scene"</div>
-    <div id="divider"></div>
-    <div id="canvas-container"></div>
+    <!-- Load Three.js -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 
-    <script type="module">
-        import * as THREE from 'https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js';
+    <script>
+        const statusEl = document.getElementById('status');
+        const errorBox = document.getElementById('error-box');
 
-        class VoiceStereoAREngine {
-            constructor() {
-                this.container = document.getElementById('canvas-container');
+        window.onerror = function(msg, url, line) {
+            errorBox.style.display = 'block';
+            errorBox.innerText = "Error: " + msg + " (Line: " + line + ")";
+            statusEl.innerText = "Failed to load.";
+            return true;
+        };
 
-                // 1. Dual Camera System for Stereoscopic VR Box alignment
-                this.ipd = 0.064; // Interpupillary distance setup
-                this.cameraL = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
-                this.cameraR = new THREE.PerspectiveCamera(60, (window.innerWidth / 2) / window.innerHeight, 0.1, 100);
-                
-                this.scene = new THREE.Scene();
-                
-                // 2. Un-distorted panoramic horizontal camera plane
-                this.bgScene = new THREE.Scene();
-                this.bgCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+        if (typeof THREE === 'undefined') {
+            errorBox.style.display = 'block';
+            errorBox.innerText = "CDN blocked! Check your internet connection or open this file via a local server.";
+            statusEl.innerText = "Connection Error";
+        } else {
+            statusEl.innerText = "Rendering C₆₀ Buckyball...";
 
-                this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-                this.renderer.setPixelRatio(window.devicePixelRatio);
-                this.renderer.setSize(window.innerWidth, window.innerHeight);
-                this.renderer.autoClear = false;
-                this.container.appendChild(this.renderer.domElement);
+            const scene = new THREE.Scene();
+            const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            const renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            document.body.appendChild(renderer.domElement);
 
-                this.spawnedObjects = [];
-                this.currentColor = 0x00ffcc;
+            // --- 1. GENERATE C60 VERTICES ---
+            const phi = (1 + Math.sqrt(5)) / 2;
+            const carbonVertices = [];
 
-                this.initCameraStream();
-                this.initSceneLighting();
-                this.initVoiceRecognition();
-                this.animate();
-
-                window.addEventListener('resize', () => this.onWindowResize());
+            function addCyclicPerms(x, y, z) {
+                const coords = [[x, y, z], [z, x, y], [y, z, x]];
+                coords.forEach(c => {
+                    for (let sx of [-1, 1]) {
+                        for (let sy of [-1, 1]) {
+                            for (let sz of [-1, 1]) {
+                                const v = new THREE.Vector3(c[0]*sx, c[1]*sy, c[2]*sz);
+                                if (!carbonVertices.some(existing => existing.distanceTo(v) < 0.01)) {
+                                    carbonVertices.push(v);
+                                }
+                            }
+                        }
+                    }
+                });
             }
 
-            async initCameraStream() {
-                try {
-                    this.video = document.createElement('video');
-                    this.video.autoplay = true;
-                    this.video.playsInline = true;
-                    
-                    this.video.srcObject = await navigator.mediaDevices.getUserMedia({
-                        video: { facingMode: 'environment', width: 1280, height: 720 }
-                    });
-                    this.video.play();
+            addCyclicPerms(0, 1, 3 * phi);
+            addCyclicPerms(1, 2 + phi, 2 * phi);
+            addCyclicPerms(phi, 2, 2 + phi);
+            carbonVertices.forEach(v => v.multiplyScalar(0.55));
 
-                    this.video.addEventListener('loadedmetadata', () => {
-                        this.setupBackgroundPlane(new THREE.VideoTexture(this.video));
-                    });
-                } catch (e) {
-                    console.warn("Camera blocked. Generating fallback simulation panel.");
-                    this.setupBackgroundPlane(this.createFallbackTexture());
+            // --- 2. DETECT BONDS ---
+            const bonds = [];
+            for (let i = 0; i < carbonVertices.length; i++) {
+                for (let j = i + 1; j < carbonVertices.length; j++) {
+                    const dist = carbonVertices[i].distanceTo(carbonVertices[j]);
+                    if (dist >= 0.8 && dist <= 1.3) {
+                        bonds.push({ start: carbonVertices[i], end: carbonVertices[j] });
+                    }
                 }
             }
 
-            setupBackgroundPlane(texture) {
-                texture.minFilter = THREE.LinearFilter;
-                const geometry = new THREE.PlaneGeometry(2, 2);
-                const material = new THREE.MeshBasicMaterial({ map: texture, depthTest: false, depthWrite: false });
-                this.bgMesh = new THREE.Mesh(geometry, material);
-                this.bgScene.add(this.bgMesh);
-                this.updateCameraAspect();
+            // --- 3. MOBILE-SAFE MATERIALS & MESHES ---
+            const atomGeo = new THREE.SphereGeometry(0.12, 16, 16);
+            const atomMat = new THREE.MeshStandardMaterial({
+                color: 0x38bdf8,
+                roughness: 0.2,
+                metalness: 0.8,
+                emissive: 0x0284c7,
+                emissiveIntensity: 0.4
+            });
+            const atomMesh = new THREE.InstancedMesh(atomGeo, atomMat, carbonVertices.length);
+
+            const bondGeo = new THREE.CylinderGeometry(0.035, 0.035, 1, 8);
+            const bondMat = new THREE.MeshStandardMaterial({
+                color: 0x94a3b8,
+                roughness: 0.3,
+                metalness: 0.5
+            });
+            const bondMesh = new THREE.InstancedMesh(bondGeo, bondMat, bonds.length);
+
+            const masterGroup = new THREE.Group();
+            masterGroup.add(atomMesh);
+            masterGroup.add(bondMesh);
+            scene.add(masterGroup);
+
+            // --- 4. INITIALIZE MATRICES ---
+            const dummy = new THREE.Object3D();
+            const atomData = [];
+
+            carbonVertices.forEach((pos, idx) => {
+                dummy.position.copy(pos);
+                dummy.scale.set(1, 1, 1);
+                dummy.updateMatrix();
+                atomMesh.setMatrixAt(idx, dummy.matrix);
+
+                atomData.push({ basePos: pos.clone(), phase: Math.random() * Math.PI * 2 });
+            });
+            atomMesh.instanceMatrix.needsUpdate = true;
+
+            const upVector = new THREE.Vector3(0, 1, 0);
+            bonds.forEach((bond, idx) => {
+                const midpoint = bond.start.clone().add(bond.end).multiplyScalar(0.5);
+                const distance = bond.start.distanceTo(bond.end);
+
+                dummy.position.copy(midpoint);
+                const subVector = bond.end.clone().sub(bond.start).normalize();
+                dummy.quaternion.setFromUnitVectors(upVector, subVector);
+                dummy.scale.set(1, distance, 1);
+                dummy.updateMatrix();
+
+                bondMesh.setMatrixAt(idx, dummy.matrix);
+            });
+            bondMesh.instanceMatrix.needsUpdate = true;
+
+            // --- 5. LIGHTING ---
+            scene.add(new THREE.AmbientLight(0xffffff, 0.8));
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(5, 10, 7);
+            scene.add(dirLight);
+
+            camera.position.set(0, 0, 4.5);
+
+            // --- 6. ANIMATION LOOP ---
+            function animate(time) {
+                requestAnimationFrame(animate);
+                const t = time * 0.001;
+
+                // Subtle organic pulse
+                atomData.forEach((atom, idx) => {
+                    let currentPos = atom.basePos.clone();
+                    const pulse = Math.sin(t * 3.0 + atom.phase) * 0.015;
+                    currentPos.addScalar(pulse);
+
+                    dummy.position.copy(currentPos);
+                    dummy.scale.set(1, 1, 1);
+                    dummy.updateMatrix();
+                    atomMesh.setMatrixAt(idx, dummy.matrix);
+                });
+                atomMesh.instanceMatrix.needsUpdate = true;
+
+                masterGroup.rotation.x = t * 0.3;
+                masterGroup.rotation.y = t * 0.4;
+
+                renderer.render(scene, camera);
             }
 
-            createFallbackTexture() {
-                const canvas = document.createElement('canvas');
-                canvas.width = 512; canvas.height = 512;
-                const ctx = canvas.getContext('2d');
-                ctx.fillStyle = '#15171e'; ctx.fillRect(0, 0, 512, 512);
-                ctx.strokeStyle = '#252936';
-                for(let i=0; i<512; i+=32) { ctx.strokeRect(i, 0, 32, 512); ctx.strokeRect(0, i, 512, 32); }
-                return new THREE.CanvasTexture(canvas);
-            }
+            animate(0);
 
-            updateCameraAspect() {
-                if (!this.bgMesh) return;
-                const videoAspect = this.video ? (this.video.videoWidth / this.video.videoHeight) : (1280 / 720);
-                const viewAspect = (window.innerWidth / 2) / window.innerHeight;
-
-                if (viewAspect > videoAspect) {
-                    this.bgMesh.scale.set(1, videoAspect / viewAspect, 1);
-                } else {
-                    this.bgMesh.scale.set(viewAspect / videoAspect, 1, 1);
-                }
-            }
-
-            initSceneLighting() {
-                const light = new THREE.DirectionalLight(0xffffff, 2.0);
-                light.position.set(2, 4, 5);
-                this.scene.add(light);
-                this.scene.add(new THREE.AmbientLight(0x666666));
-            }
-
-            /**
-             * 3. Speech Recognition Integration
-             */
-            initVoiceRecognition() {
-                const SpeechRecognition = window.SpeechRecognition || window.webkit
+            window.addEventListener('resize', () => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            });
+        }
+    </script>
+</body>
+</html>
