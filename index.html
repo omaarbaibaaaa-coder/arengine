@@ -93,9 +93,7 @@
                 slider.addEventListener('input', (e) => {
                     settings[settingKey] = parseFloat(e.target.value);
                     display.innerText = formatter(settings[settingKey]);
-                    if (settingKey === 'totalAtoms') {
-                        regenerateLattice();
-                    }
+                    regenerateLattice(); // Re-calculates positions when any slider moves
                 });
             }
 
@@ -141,8 +139,15 @@
                 atomMesh = new THREE.InstancedMesh(atomGeometry, atomMaterial, settings.totalAtoms);
                 scene.add(atomMesh);
 
+                const axis = new THREE.Vector3(0, 1, 0).normalize();
+
                 for (let i = 0; i < settings.totalAtoms; i++) {
-                    const v = getFibonacciSpherePoint(i, settings.totalAtoms);
+                    let v = getFibonacciSpherePoint(i, settings.totalAtoms);
+
+                    // Apply theta-based quaternion rotation to morph the actual position
+                    const qRot = new THREE.Quaternion().setFromAxisAngle(axis, settings.theta * (i * 0.05));
+                    v.applyQuaternion(qRot);
+
                     const q = new THREE.Quaternion(
                         v.x * Math.sin(settings.theta),
                         v.y * Math.sin(settings.theta),
